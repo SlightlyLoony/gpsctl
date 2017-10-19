@@ -40,110 +40,121 @@
 #define _POSIX_C_SOURCE 199309L
 
 #include <stdlib.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <getopt.h>
+#include "slightly_loony.h"
 
-#define ARG_ERROR   0
-#define ARG_USAGE   1
-#define ARG_HELP    2
-#define ARG_VERSION 3
-#define ARG_BAUD    4
-#define ARG_READ    5
-#define ARG_TOGGLE  6
-#define ARG_ECHO    7
+static struct parsed_args {
+    bool verbose;
+    bool autobaud;
+    char *port;
+    int baud;
+    int newbaud;
+    bool test;
+    bool usage;
+    bool help;
+    bool version;
+    bool report;
+    bool error;
+    char *errorMsg;
+} parsed_args;
 
-static int mode = 0;
-static int quiet = 0;
-static int high = 0;
 
-
-const char *gpsctl_version = "gpscfg 0.1\n";
-const char *gpsctl_doc     = "gpscfg - control and configure U-Blox GPS on Raspberry Pi 3 port serial0\n";
-char *gpsctl_usage = "usage: gpsctl [-qh] -b | -r | -t | -e | -? | -V\n";
-char *gpsctl_help = "Options:\n" \
-                    "  -?, --help      display this help message and exit\n"\
-                    "  -V, --version   display gpsctl version number\n"\
-                    "  -b, --baud      report the GPS's baud rate\n" \
-                    "  -e, --echo      echo GPS NMEA data to stdout\n"\
-                    "  -h, --high      try synchronizing to 115,200 baud first, otherwise 9,600 baud\n"\
-                    "  -q, --quiet     suppress non-error messages\n"\
-                    "  -r, --read      read GPS port configuration\n"\
-                    "  -t, --toggle    toggle GPS between 9,600 baud and 115,200 baud\n"\
-                    "  --usage         display short message on usage of gpsctl\n";
+const char *gpsctl_version = "version: gpscfg 0.1\n";
+const char *gpsctl_doc     = "purpose: gpscfg - control and configure U-Blox GPS on Raspberry Pi 3 port serial0\n";
+char *gpsctl_usage = "usage: gpsctl [-?VUartv] -p \n";
+char *gpsctl_help = "options:\n" \
+                    "  -?, --help      display this help message and exit\n"
+                    "  -V, --version   display gpsctl version number\n"
+                    "  -U, --usage     display short message on usage of gpsctl\n"
+                    "  -p, --port      specify the device for the serial port (default is '/dev/serial0')\n"
+                    "  -b, --baud      specify current baud rate (default is 9600); any standard rate is allowed\n"
+                    "  -a, --autobaud  enable baud rate discovery (if -b is specified, starting with that rate)\n"
+                    "  -r, --report    print a report on the U-Blox GPS configuration\n"
+                    "  -B, --newbaud   change the U-Blox baud rate to the specified standard rate\n"
+                    "  -t, --test      test for the presence of NMEA data on the serial port\n"
+                    "  -v, --verbose   get verbose messages";
 
 static struct option options[] = {
-    { "usage",   no_argument, &mode,  ARG_USAGE   },
-    { "help",    no_argument, &mode,  ARG_HELP    },
-    { "version", no_argument, &mode,  ARG_VERSION },
-    { "baud",    no_argument, &mode,  ARG_BAUD    },
-    { "read",    no_argument, &mode,  ARG_READ    },
-    { "toggle",  no_argument, &mode,  ARG_TOGGLE  },
-    { "echo",    no_argument, &mode,  ARG_ECHO    },
-    { "quiet",   no_argument, &quiet, 1           },
-    { "high",    no_argument, &high,  1           },
-    { 0, 0, 0, 0 }
+    { "help",     no_argument,       0, '?' },
+    { "version",  no_argument,       0, 'V' },
+    { "usage",    no_argument,       0, 'U' },
+    { "port",     required_argument, 0, 'p' },
+    { "baud",     required_argument, 0, 'b' },
+    { "autobaud", no_argument,       0, 'a' },
+    { "report",   no_argument,       0, 'r' },
+    { "new_baud", required_argument, 0, 'B' },
+    { "test",     no_argument,       0, 't' },
+    { "verbose",  no_argument,       0, 'v' },
+    { 0,          0,                 0, 0   }
 };
 
 
-// get program options...
-void getOptions( int argc, char *argv[] ) {
+// Parse the given argument, which is presumed to be a string representing a positive integer that is one of the
+// standard baud rates.  If the parsing fails for any reason, the error flag is set, an error message set, and -1
+// returned.
+static int getBaud( const char * arg ) {
+
+    int validRates[] = { 50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800,
+                         2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400 };
+
+    // sanity check...
+    if( !arg ) {
+        parsed_args.error = true;
+        parsed_args.errorMsg = "missing baud rate argument";
+        return -1;
+    }
+
+    // make sure we can parse the entire argument into an integer...
+    char *endPtr;
+    int baud = (int) strtol( arg, &endPtr, 10 );
+    if( *endPtr != 0 ) {
+        parsed_args.error = true;
+        parsed_args.errorMsg = concat( "Baud rate not an integer: ", arg );
+        return -1;
+    }
+
+    // make sure the result is a valid baud rate...
+    for( int i = 0; i < ARRAY_SIZE(validRates); i++ ) {
+        if( baud == validRates[i] )
+            return baud;
+    }
+    parsed_args.error = true;
+    parsed_args.errorMsg = concat( "Invalid baud rate ", arg );
+    return -1;
+}
+
+
+// Process program options.  Returns true on success, false if there was any error.
+bool getOptions( int argc, char *argv[] ) {
     int option_index;
     int c;
-    int mc = 0;
-    while( ( c = getopt_long( argc, argv, "breqth?V", options, &option_index) ) != -1 ) {
+    while ((c = getopt_long(argc, argv, "VUp:b:arB:tv?", options, &option_index)) != -1) {
 
-        if( c == -1 ) break;  // detect end of options...
+        if (c == -1) break;  // detect end of options...
 
         switch( c ) {
-            case 0:
-                if( options[option_index].flag == &mode ) mc++;
-                break;
-            case 'b': mc++; mode = ARG_BAUD;    break;
-            case 'r': mc++; mode = ARG_READ;    break;
-            case 't': mc++; mode = ARG_TOGGLE;  break;
-            case 'e': mc++; mode = ARG_ECHO;    break;
-            case 'V': mc++; mode = ARG_VERSION; break;
-            case 'q': quiet = 1;                break;
-            case 'h': high = 1;                 break;
-            case '?': mc++; mode = ARG_HELP;    break;
+            case 0:         break;  // none of our options set flags, so naught to do here...
+            case 'b': parsed_args.baud = getBaud( optarg );    break;
             default:                            break;
         }
+
+        // check for an error on the option we just processed...
+        if( parsed_args.error ) {
+            puts( concat( "Error in program options: ", parsed_args.errorMsg ) );
+            return false;
+        }
     }
-    if( mc != 1 ) mode = ARG_ERROR;
+
+    return true;
 }
 
 int main( int argc, char *argv[] ) {
 
-    getOptions( argc, argv );
+    if( getOptions( argc, argv ) ) {
 
-    if( mode != ARG_ERROR ) {
-
-        int result;
-        int fd;
-
-        switch( mode ) {
-
-            case ARG_USAGE:
-                puts( gpsctl_usage );
-                break;
-
-            case ARG_HELP:
-            case ARG_ERROR:
-                puts( gpsctl_doc );
-                puts( gpsctl_usage );
-                puts( gpsctl_help );
-                break;
-
-            case ARG_VERSION:
-                puts( gpsctl_version );
-                break;
-
-            default:
-                break;
-        }
         exit( 0 );
     }
-    else {
-        exit( 1 );
-    }
+    exit( 1 );
 }
