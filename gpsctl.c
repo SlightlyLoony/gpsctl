@@ -33,7 +33,7 @@
 
 // these defines allow compiling on both an OS X development machine and the target Raspberry Pi.  If different
 // development environments or target machines are needed, these will likely need to be tweaked.
-#define _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
 #ifdef Macintosh
     #define _DARWIN_C_SOURCE
 #endif /* Macintosh */
@@ -43,6 +43,9 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <getopt.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include "slightly_loony.h"
 
 static struct parsed_args {
@@ -58,11 +61,12 @@ static struct parsed_args {
     bool report;
     bool error;
     char *errorMsg;
+    bool errorMsgAllocated;
 } parsed_args;
 
 
-const char *gpsctl_version = "version: gpscfg 0.1\n";
-const char *gpsctl_doc     = "purpose: gpscfg - control and configure U-Blox GPS on Raspberry Pi 3 port serial0\n";
+const char *gpsctl_version = "version: gpsctl 0.1\n";
+const char *gpsctl_doc     = "purpose: gpsctl - control, query and configure U-Blox GPS on Raspberry Pi 3 serial port\n";
 char *gpsctl_usage = "usage: gpsctl [-?VUartv] -p \n";
 char *gpsctl_help = "options:\n" \
                     "  -?, --help      display this help message and exit\n"
@@ -74,8 +78,16 @@ char *gpsctl_help = "options:\n" \
                     "  -r, --report    print a report on the U-Blox GPS configuration\n"
                     "  -B, --newbaud   change the U-Blox baud rate to the specified standard rate\n"
                     "  -t, --test      test for the presence of NMEA data on the serial port\n"
-                    "  -v, --verbose   get verbose messages";
+                    "  -v, --verbose   get verbose messages\n";
 
+
+static void showHelp( void )    { printf( gpsctl_help );    }
+static void showVersion( void ) { printf( gpsctl_version ); }
+static void showUsage( void )   { printf( gpsctl_usage );   }
+
+
+// Used by getopt_long to parse long options.  Note that we're using it basically to map long options to short
+// options, though it also gives us the additional benefit of using "equals" format (like "--baud=9600"
 static struct option options[] = {
     { "help",     no_argument,       0, '?' },
     { "version",  no_argument,       0, 'V' },
@@ -91,6 +103,28 @@ static struct option options[] = {
 };
 
 
+// Given a short option character, returns the long version of the option (or null if there wasn't any).
+static char* getLongOption( const char shortOption ) {
+    struct option* curOption = options;
+    while( curOption->name ) {
+        if( shortOption == curOption->val )
+            return (char *) curOption->name;
+        curOption++;
+    }
+    return NULL;
+}
+
+
+// Helper function to create error messages with the argument embedded.  Always returns -1.
+static int errMsgHelper( char *format, const char *arg ) {
+    size_t len = strlen( format ) + strlen( arg ) + 10;
+    parsed_args.errorMsg = safeMalloc( len );
+    snprintf( parsed_args.errorMsg, len - 1, format, arg );
+    parsed_args.errorMsgAllocated = true;
+    return -1;
+}
+
+
 // Parse the given argument, which is presumed to be a string representing a positive integer that is one of the
 // standard baud rates.  If the parsing fails for any reason, the error flag is set, an error message set, and -1
 // returned.
@@ -101,7 +135,6 @@ static int getBaud( const char * arg ) {
 
     // sanity check...
     if( !arg ) {
-        parsed_args.error = true;
         parsed_args.errorMsg = "missing baud rate argument";
         return -1;
     }
@@ -109,52 +142,95 @@ static int getBaud( const char * arg ) {
     // make sure we can parse the entire argument into an integer...
     char *endPtr;
     int baud = (int) strtol( arg, &endPtr, 10 );
-    if( *endPtr != 0 ) {
-        parsed_args.error = true;
-        parsed_args.errorMsg = concat( "Baud rate not an integer: ", arg );
-        return -1;
-    }
+    if( *endPtr != 0 ) return errMsgHelper( "specified baud rate (\"%s\") not an integer", arg );
 
     // make sure the result is a valid baud rate...
-    for( int i = 0; i < ARRAY_SIZE(validRates); i++ ) {
-        if( baud == validRates[i] )
-            return baud;
-    }
-    parsed_args.error = true;
-    parsed_args.errorMsg = concat( "Invalid baud rate ", arg );
-    return -1;
+    if( getBaudRateCookie( baud ) >0 ) return baud;
+
+    // we can only get here if the given baud rate WASN'T a valid one...
+    return errMsgHelper( "specified baud rate (\"%s\") is not valid", arg );
+}
+
+
+// Parses the given argument, which is presumed to be a string that is the name of a serial device.  If the specified
+// device does not exist, or is not a serial device, produces an error.  If there were no errors, the device in
+// parsed_args is changed to the argument.  The return value is 0 if there was no error, or -1 if there was an error.
+static int getPort( const char *arg ) {
+
+    int vsd = verifySerialDevice( arg );
+    if( vsd == VSD_NULL          ) return errMsgHelper( "no serial device was specified", arg );
+    if( vsd == VSD_NOT_TERMINAL  ) return errMsgHelper( "the specified device (\"%s\") is not a terminal", arg );
+    if( vsd == VSD_CANT_OPEN     ) return errMsgHelper( "the specified device (\"%s\") cannot be opened", arg );
+    if( vsd == VSD_NONEXISTENT   ) return errMsgHelper( "the specified device (\"%s\") doesn't exist", arg );
+    if( vsd == VSD_NOT_CHARACTER ) return errMsgHelper( "the specified device (\"%s\") is not a character device", arg );
+    if( vsd == VSD_NOT_DEVICE    ) return errMsgHelper( "the specified device (\"%s\") is not a device", arg );
+
+    parsed_args.port = (char *) arg;
+    return VSD_IS_SERIAL;
 }
 
 
 // Process program options.  Returns true on success, false if there was any error.
 bool getOptions( int argc, char *argv[] ) {
+
     int option_index;
-    int c;
-    while ((c = getopt_long(argc, argv, "VUp:b:arB:tv?", options, &option_index)) != -1) {
+    int opt;
 
-        if (c == -1) break;  // detect end of options...
+    // set our default values...
+    parsed_args.port = "/dev/serial0";
+    parsed_args.baud = 9600;
 
-        switch( c ) {
-            case 0:         break;  // none of our options set flags, so naught to do here...
-            case 'b': parsed_args.baud = getBaud( optarg );    break;
-            default:                            break;
+    // process each option on the command line...
+    while( (opt = getopt_long(argc, argv, "VUp:b:arB:tv?", options, &option_index)) != -1 ) {
+
+        if (opt == -1) break;  // detect end of options...
+
+        switch( opt ) {
+            case 0:                                            break;  // none of our options set flags, so naught to do here...
+            case 'b': parsed_args.baud = getBaud( optarg );    break;  // -b or --baud
+            case 'B': parsed_args.newbaud = getBaud( optarg ); break;  // -B or --newbaud
+            case '?': parsed_args.help = true;                 break;  // -? or --help
+            case 'U': parsed_args.usage = true;                break;  // -U or --usage
+            case 'V': parsed_args.version = true;              break;  // -V or --version
+            case 'p': getPort( optarg);                        break;  // -p or --port
+            case 'v': parsed_args.verbose = true;              break;  // -v or --verbose
+            default:                                           break;
         }
 
         // check for an error on the option we just processed...
-        if( parsed_args.error ) {
-            puts( concat( "Error in program options: ", parsed_args.errorMsg ) );
-            return false;
+        if( parsed_args.errorMsg ) {
+            parsed_args.error = true;
+            printf("Error in program option -%c or --%s: %s\n", opt,
+                   getLongOption((const char) opt), parsed_args.errorMsg );
+            if( parsed_args.errorMsgAllocated ) free( parsed_args.errorMsg );
+            parsed_args.errorMsg = NULL;
         }
     }
 
-    return true;
+    return !parsed_args.error;
 }
 
+
+// The entry point for gpsctl...
 int main( int argc, char *argv[] ) {
 
     if( getOptions( argc, argv ) ) {
 
+        if( parsed_args.version ) showVersion();
+        if( parsed_args.usage   ) showUsage();
+        if( parsed_args.help    ) showHelp();
+
+        // open our serial port for reading or writing, non-blocking...
+        int serial = open( parsed_args.port, O_RDWR | O_NOCTTY | O_NONBLOCK );
+        if( serial < 0 ) {
+            printf( "Failed to open serial port (\"%s\")!\n", parsed_args.port );
+            exit(1);
+        }
+        if( parsed_args.verbose ) printf( "Serial port (\"%s\") open...\n", parsed_args.port );
+
+        close( serial );
         exit( 0 );
     }
+    printf( "Errors prevented gpsctl from running..." );
     exit( 1 );
 }

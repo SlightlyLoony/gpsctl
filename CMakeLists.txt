@@ -3,5 +3,5 @@ project(gpsctl)
 
 set(CMAKE_C_STANDARD 11)
 
-set(SOURCE_FILES gpsctl.c slightly_loony.c slightly_loony.h)
+set(SOURCE_FILES gpsctl.c slightly_loony.c slightly_loony.h ublox.c ublox.h)
 add_executable(gpsctl ${SOURCE_FILES})
