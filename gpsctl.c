@@ -46,9 +46,9 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <ctype.h>
 #include "sl_general.h"
 #include "sl_serial.h"
+#include "ublox.h"
 
 
 struct parsed_args {
@@ -57,11 +57,12 @@ struct parsed_args {
     char *port;
     int baud;
     int newbaud;
-    bool test;
     bool usage;
     bool help;
     bool version;
     bool report;
+    bool echo;
+    int echoMax;
     bool error;
     bool synchronize;
     char *errorMsg;
@@ -69,24 +70,30 @@ struct parsed_args {
 };
 
 
-const char *gpsctl_version = "version: gpsctl 0.1\n";
-const char *gpsctl_doc     = "purpose: gpsctl - control, query and configure U-Blox GPS on Raspberry Pi 3 serial port\n";
-char *gpsctl_usage = "usage: gpsctl [-?VUartv] -p \n";
-char *gpsctl_help = "options:\n" \
+static const char *gpsctl_version        = "gpsctl 0.1\n";
+static const char *gpsctl_pretty_version = "Version:\n  %s";
+static const char *gpsctl_doc            = "Purpose:\n  gpsctl - control, query and configure U-Blox GPS on Raspberry Pi 3 serial port\n";
+static const char *gpsctl_usage          = "Usage:\n  gpsctl [-?VUarstv] -p <port> -b <baud> -B <baud> -e [maxtime]\n";
+static const char *gpsctl_help = "Options:\n" \
                     "  -?, --help      display this help message and exit\n"
                     "  -V, --version   display gpsctl version number\n"
                     "  -U, --usage     display short message on usage of gpsctl\n"
                     "  -p, --port      specify the device for the serial port (default is '/dev/serial0')\n"
                     "  -b, --baud      specify current baud rate (default is 9600); any standard rate is allowed\n"
                     "  -a, --autobaud  enable baud rate discovery (if -b is specified, starting with that rate)\n"
-                    "  -r, --report    print a report on the U-Blox GPS configuration\n"
                     "  -B, --newbaud   change the U-Blox baud rate to the specified standard rate\n"
-                    "  -t, --test      test for the presence of NMEA data on the serial port\n"
                     "  -s, --sync      synchronize after setting baud rate\n"
-                    "  -v, --verbose   get verbose messages\n";
+                    "  -v, --verbose   get verbose messages\n"
+                    "  -e, --echo      echo GPS (presumably NMEA) data to the stdout, optionally with a maximum time";
 
 
-static void showHelp( void )    { printf( gpsctl_help );    }
+static void showHelp( void )    {
+    printf( gpsctl_doc);
+    printf( gpsctl_pretty_version, gpsctl_version );
+    printf( gpsctl_usage );
+    printf( gpsctl_help );
+}
+
 static void showVersion( void ) { printf( gpsctl_version ); }
 static void showUsage( void )   { printf( gpsctl_usage );   }
 
@@ -100,12 +107,11 @@ static struct option options[] = {
     { "port",        required_argument, 0, 'p' },
     { "baud",        required_argument, 0, 'b' },
     { "autobaud",    no_argument,       0, 'a' },
-    { "report",      no_argument,       0, 'r' },
     { "new_baud",    required_argument, 0, 'B' },
-    { "test",        no_argument,       0, 't' },
     { "verbose",     no_argument,       0, 'v' },
     { "synchronize", no_argument,       0, 's' },
-    { 0,          0,                 0, 0   }
+    { "echo",        optional_argument, 0, 'e' },
+    { 0,             0,                 0, 0   }
 };
 
 
@@ -176,6 +182,23 @@ static int getPort( const char *arg, struct parsed_args *parsed_args ) {
 }
 
 
+static int getEcho( const char *arg, struct parsed_args *parsed_args ) {
+
+    // get any max time parameter...
+    parsed_args->echoMax = 0;
+    if( arg ) {
+
+        // make sure we can parse the entire argument into an integer...
+        char *endPtr;
+        parsed_args->echoMax = (int) strtol(arg, &endPtr, 10);
+        if (*endPtr != 0) return errMsgHelper("specified max echo time (\"%s\") not an integer", arg, parsed_args);
+    }
+
+    parsed_args->echo = true;
+    return 0;
+}
+
+
 // Process program options.  Returns true on success, false if there was any error.
 bool getOptions( int argc, char *argv[], struct parsed_args *parsed_args ) {
 
@@ -187,7 +210,7 @@ bool getOptions( int argc, char *argv[], struct parsed_args *parsed_args ) {
     parsed_args->baud = 9600;
 
     // process each option on the command line...
-    while( (opt = getopt_long(argc, argv, "VUp:b:arB:tvs?", options, &option_index)) != -1 ) {
+    while( (opt = getopt_long(argc, argv, ":VUp:b:arB:vse::?", options, &option_index)) != -1 ) {
 
         if (opt == -1) break;  // detect end of options...
 
@@ -202,6 +225,8 @@ bool getOptions( int argc, char *argv[], struct parsed_args *parsed_args ) {
             case 'v': parsed_args->verbose = true;                           break;  // -v or --verbose
             case 's': parsed_args->synchronize = true;                       break;  // -s or --sync
             case 'a': parsed_args->autobaud = true;                          break;  // -a or --autobaud
+            case 'e': getEcho( optarg, parsed_args );                        break;  // -e or --echo
+            case ':':                                                        break;  // required argument is missing
             default:                                                         break;
         }
 
@@ -219,7 +244,7 @@ bool getOptions( int argc, char *argv[], struct parsed_args *parsed_args ) {
 }
 
 
-// Default baud rate synchronizer. This looks for a complete, valid NMEA sentence and then declares victory.
+// NMEA baud rate synchronizer. This looks for a complete, valid NMEA sentence and then declares victory.
 // This function takes one of three different actions depending on the argument values:
 //   *state == NULL:            initializes its state and sets *state to point to it, returns false
 //   *state != NULL && c >= 0:  updates the state, if synchronized returns true, sets *state to NULL
@@ -318,6 +343,31 @@ static int openSerialPort( struct parsed_args *parsed_args ) {
 }
 
 
+static void echo( int fdPort, bool verbose, int maxSeconds ) {
+
+    if( verbose ) printf( "Starting echo...\n" );
+
+    // figure out our timing...
+    speedInfo si = getSpeedInfo( fdPort );
+    long long startTime = currentTimeMs();
+    long long maxEchoMS = 1000 * maxSeconds;
+    int maxCharNS = si.nsChar >> 1;
+
+    while( (maxSeconds == 0) || ((currentTimeMs() - startTime) < maxEchoMS) ) {
+        int c = readSerialChar( fdPort, maxCharNS );
+        if( c >= 0 ) printf( "%c", c );
+    }
+
+    if( verbose ) printf( "\nEnding echo...\n" );
+}
+
+
+// Print report on U-Blox GPS...
+static void report( int fdPort, bool verbose ) {
+
+}
+
+
 // The entry point for gpsctl...
 int main( int argc, char *argv[] ) {
 
@@ -331,6 +381,11 @@ int main( int argc, char *argv[] ) {
 
         // open and set up our serial port...
         int fdPort = openSerialPort( &parsed_args );
+
+        test( fdPort );
+
+        if( parsed_args.report  ) report( fdPort, parsed_args.verbose );
+        if( parsed_args.echo    ) echo( fdPort, parsed_args.verbose, parsed_args.echoMax );
 
         close( fdPort );
         exit( 0 );

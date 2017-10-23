@@ -7,6 +7,20 @@
 
 #define ARRAY_SIZE(x) (sizeof (x) / sizeof *(x))
 
+typedef unsigned char byte;
+
+typedef struct sl_buffer {
+    byte *buffer;  // the actual buffer
+    size_t size;            // the number of bytes in the buffer
+    bool allocated;         // true if the buffer was allocated with malloc et al
+} sl_buffer;
+
+sl_buffer allocateSlBuffer( size_t size );
+
+void freeSlBuffer( sl_buffer buffer );
+
+void printSlBuffer( sl_buffer buffer );
+
 void stackDump( void );
 
 void *safeMalloc( size_t size );

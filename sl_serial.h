@@ -14,6 +14,7 @@ typedef struct speedInfo {
     int nsBit;     // number of nanoseconds to receive or transmit a bit
     int nsChar;    // number of nanoseconds to receive or transmit a character
 } speedInfo;
+speedInfo getSpeedInfo( int fdPort );
 
 #define VSD_CANT_OPEN     6
 #define VSD_NULL          5

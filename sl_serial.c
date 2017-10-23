@@ -24,7 +24,7 @@
 
 
 // Returns speed information for the given port.
-speedInfo getSpeedInfo( int fdPort ) {
+extern speedInfo getSpeedInfo( int fdPort ) {
     speedInfo result;
     struct termios options;
     tcgetattr( fdPort, &options );
@@ -80,7 +80,7 @@ extern int verifySerialDevice( const char *deviceName ) {
 // the character read or one of the following values:
 // RSC_TIMED_OUT
 // RSC_READ_ERROR
-extern int readSerialChar( int fdPort, long long msTimeout ) {
+extern int readSerialChar( int fdPort, long long nsTimeout ) {
 
     unsigned char c;
     long long startTime = currentTimeMs();
@@ -91,7 +91,7 @@ extern int readSerialChar( int fdPort, long long msTimeout ) {
     int sleepyNs = getSpeedInfo( fdPort ).nsChar >> 1;
 
     // keep trying unless we run out of time...
-    while( (currentTimeMs() - startTime) < msTimeout ) {
+    while( (currentTimeMs() - startTime) < nsTimeout ) {
 
         count++;
 
@@ -310,8 +310,9 @@ extern int setBaudRate( int fdPort, int baudRate, bool synchronize, bool autoRat
             long long start = currentTimeMs();
             speedInfo si = getSpeedInfo( fdPort );
             long long timeout = max_ll( 1000, 200 * si.nsChar / 1000000 ); // max of one second or 200 character times...
+            int charTimeout = si.nsChar >> 1;
             while( (currentTimeMs() - start) < timeout ) {
-                int c = readSerialChar(fdPort, timeout );
+                int c = readSerialChar(fdPort, charTimeout );
                 if( c == RSC_READ_ERROR ) {
                     printf( "Error from read() when reading serial port (ERRNO: %d)!\n", errno );
                     synchronizer( -1, &state );  // close synchronizer...

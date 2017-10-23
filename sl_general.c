@@ -22,6 +22,31 @@
 #include <ctype.h>
 #include "sl_general.h"
 
+
+extern sl_buffer allocateSlBuffer( size_t size ) {
+    sl_buffer result;
+    result.buffer = safeMalloc( size );
+    result.size = size;
+    result.allocated = true;
+    return result;
+}
+
+
+extern void freeSlBuffer( sl_buffer buffer ) {
+    if( buffer.allocated ) return;
+    free( buffer.buffer );
+    buffer.buffer = NULL;
+}
+
+
+extern void printSlBuffer( sl_buffer buffer ) {
+    printf( ":");
+    for( int i = 0; i < buffer.size; i++ )
+        printf( "%02x:", buffer.buffer[i] );
+    printf( "\n" );
+}
+
+
 // Dumps a stack trace to stderr.
 extern void stackDump( void ) {
     #define STACK_DUMP_SIZE 250
