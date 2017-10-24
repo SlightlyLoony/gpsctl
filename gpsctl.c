@@ -32,6 +32,14 @@
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 // TODO: make my own get_options_long() equivalent, easier to configure?
+// TODO: add change baud rate (still not getting acks for lowering baud, increasing baud I do.  weird!
+// TODO: add save configuration
+// TODO: add set stationary or portable mode
+// TODO: add query (with parameter for what kind) and -j JSON option
+// TODO: add UBX-only synchronizer (so it will synchronize even without NMEA data)
+// TODO: turn NMEA data off while changing baud rate
+// TODO: add turn NMEA data on and off
+
 
 // these defines allow compiling on both an OS X development machine and the target Raspberry Pi.  If different
 // development environments or target machines are needed, these will likely need to be tweaked.
@@ -63,6 +71,7 @@ struct parsed_args {
     bool report;
     bool echo;
     int echoMax;
+    int queryType;
     bool error;
     bool synchronize;
     char *errorMsg;
@@ -84,7 +93,11 @@ static const char *gpsctl_help = "Options:\n" \
                     "  -B, --newbaud   change the U-Blox baud rate to the specified standard rate\n"
                     "  -s, --sync      synchronize after setting baud rate\n"
                     "  -v, --verbose   get verbose messages\n"
-                    "  -e, --echo      echo GPS (presumably NMEA) data to the stdout, optionally with a maximum time";
+                    "  -e, --echo      echo human-readable GPS (presumably NMEA) data to the stdout, optionally with a maximum time\n"
+                    "  -q, --query     query the GPS for info (see QUERY TYPES below)\n"
+                    "\n"
+                    "Query types:\n"
+                    "   fix       reports latitude, longitude, altitude, and time with accuracy figures\n";
 
 
 static void showHelp( void )    {
@@ -111,6 +124,7 @@ static struct option options[] = {
     { "verbose",     no_argument,       0, 'v' },
     { "synchronize", no_argument,       0, 's' },
     { "echo",        optional_argument, 0, 'e' },
+    { "query",       required_argument, 0, 'q' },
     { 0,             0,                 0, 0   }
 };
 
@@ -182,6 +196,25 @@ static int getPort( const char *arg, struct parsed_args *parsed_args ) {
 }
 
 
+static char *query_types[] = {
+        "fix"
+};
+
+// Parses the given argument and sets queryType in parsed_args to indicate the type.  Returns 0 on success, or -1
+// if the argument wasn't recognized.
+static int getQueryType( const char *arg, struct parsed_args *parsed_args ) {
+
+    for( int i = 0; i < sizeof( query_types); i++ ) {
+
+        if( strcmp( arg, query_types[i] ) == 0 ) {
+            parsed_args->queryType = i + 1;
+            return 0;
+        }
+    }
+    return errMsgHelper( "the given argument (\"%s\") is not a valid option for -q/--query", arg, parsed_args );
+}
+
+
 static int getEcho( const char *arg, struct parsed_args *parsed_args ) {
 
     // get any max time parameter...
@@ -210,7 +243,7 @@ bool getOptions( int argc, char *argv[], struct parsed_args *parsed_args ) {
     parsed_args->baud = 9600;
 
     // process each option on the command line...
-    while( (opt = getopt_long(argc, argv, ":VUp:b:arB:vse::?", options, &option_index)) != -1 ) {
+    while( (opt = getopt_long(argc, argv, ":VUp:b:arB:vsq:e::?", options, &option_index)) != -1 ) {
 
         if (opt == -1) break;  // detect end of options...
 
@@ -226,6 +259,7 @@ bool getOptions( int argc, char *argv[], struct parsed_args *parsed_args ) {
             case 's': parsed_args->synchronize = true;                       break;  // -s or --sync
             case 'a': parsed_args->autobaud = true;                          break;  // -a or --autobaud
             case 'e': getEcho( optarg, parsed_args );                        break;  // -e or --echo
+            case 'q': getQueryType( optarg, parsed_args );                   break;  // -q or --query
             case ':':                                                        break;  // required argument is missing
             default:                                                         break;
         }
@@ -362,9 +396,28 @@ static void echo( int fdPort, bool verbose, int maxSeconds ) {
 }
 
 
-// Print report on U-Blox GPS...
-static void report( int fdPort, bool verbose ) {
+// Change baud rate on GPS and on host port...
+static void newBaud( int fdPort, int newBaud, bool verbose ) {
 
+    changeBaudResponse resp = changeBaudRate( fdPort, newBaud, verbose );
+}
+
+
+static void fixQuery( int fdPort, bool verbose ) {
+
+    pvt_fix fix = {0}; // zeroes all elements...
+    int result = getFix( fdPort, verbose, &fix );
+}
+
+
+// query the GPS for different things.
+static void query( int fdPort, int queryType, bool verbose ) {
+
+    switch( queryType ) {
+
+        case 1: fixQuery( fdPort, verbose ); break;  // "fix"
+        default: break;
+    }
 }
 
 
@@ -382,10 +435,9 @@ int main( int argc, char *argv[] ) {
         // open and set up our serial port...
         int fdPort = openSerialPort( &parsed_args );
 
-        test( fdPort );
-
-        if( parsed_args.report  ) report( fdPort, parsed_args.verbose );
-        if( parsed_args.echo    ) echo( fdPort, parsed_args.verbose, parsed_args.echoMax );
+        if( parsed_args.queryType ) query( fdPort, parsed_args.queryType, parsed_args.verbose );
+        if( parsed_args.newbaud   ) newBaud( fdPort, parsed_args.newbaud, parsed_args.verbose );
+        if( parsed_args.echo      ) echo( fdPort, parsed_args.verbose, parsed_args.echoMax );
 
         close( fdPort );
         exit( 0 );

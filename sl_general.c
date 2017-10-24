@@ -8,43 +8,7 @@
 #define _DARWIN_C_SOURCE
 #define _POSIX_C_SOURCE 199309L
 
-#include <memory.h>
-#include <stdlib.h>
-#include <execinfo.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <stdbool.h>
-#include <fcntl.h>
-#include <termios.h>
-#include <sys/stat.h>
-#include <time.h>
-#include <errno.h>
-#include <ctype.h>
 #include "sl_general.h"
-
-
-extern sl_buffer allocateSlBuffer( size_t size ) {
-    sl_buffer result;
-    result.buffer = safeMalloc( size );
-    result.size = size;
-    result.allocated = true;
-    return result;
-}
-
-
-extern void freeSlBuffer( sl_buffer buffer ) {
-    if( buffer.allocated ) return;
-    free( buffer.buffer );
-    buffer.buffer = NULL;
-}
-
-
-extern void printSlBuffer( sl_buffer buffer ) {
-    printf( ":");
-    for( int i = 0; i < buffer.size; i++ )
-        printf( "%02x:", buffer.buffer[i] );
-    printf( "\n" );
-}
 
 
 // Dumps a stack trace to stderr.
@@ -121,4 +85,21 @@ extern void sleep_ns( int ns ) {
 extern int hex2int( char c ) {
     if( !isxdigit( c ) ) return -1;
     return ((c >= '0') && (c <= '9')) ? (c - '0') : (0x0F & (c + 9));
+}
+
+
+// Returns true if the given year is a leap year...
+extern bool isLeapYear( uint32_t year ) {
+    return ((year % 400) == 0) || (((year % 4) == 0) && ((year % 100) != 0));
+}
+
+
+// Returns the number of days in the given month in the given year.  The month is represented by [1..12].
+static uint8_t minDaysInMonth[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+extern uint32_t daysInMonth( uint32_t year, uint32_t month ) {
+    if( (month == 0) || (month > 12)) return 0;
+    uint32_t result = minDaysInMonth[month - 1];
+    if( (month == 2) && isLeapYear( year ) )
+        result++;
+    return result;
 }

@@ -19,32 +19,19 @@
 #include "sl_general.h"
 #include "ublox.h"
 #include "sl_serial.h"
+#include "sl_buffer.h"
+#include "sl_bits.h"
 
-typedef enum ubxState    { Valid, NotValid, NotPresent } ubxState;
-typedef enum ubxResponse { Ok, TxFail, InvalidPollResponse, NoPollResponse, UnexpectedPollResponse,
-                           NAK, UnexpectedAck, InvalidAck, NoAck, None } ubxResponse;
 
-typedef struct ubxChecksum {
-    byte ck_a;
-    byte ck_b;
-} ubxChecksum;
+static ubxType ut_ACK_NAK = { UBX_ACK, UBX_ACK_NAK };
+static ubxType ut_CFG_PRT = { UBX_CFG, UBX_CFG_PRT };
+static ubxType ut_NAV_PVT = { UBX_NAV, UBX_NAV_PVT };
 
-typedef struct ubxType {
-    byte class;
-    byte id;
-} ubxType;
-#define UBX_ACK 0x05
-#define UBX_ACK_ACK 0x01
-#define UBX_ACK_NAK 0x00
-#define UBX_CFG 0x06
-#define UBX_MON 0x0A
-#define UBX_MON_VER 0x04
-static ubxType ubxTypeNAK = { UBX_ACK, UBX_ACK_NAK };
 
 typedef struct ubxMsg {
     ubxState state;
     ubxType type;
-    sl_buffer body;
+    slBuffer *body;
     ubxChecksum checksum;
 } ubxMsg;
 
@@ -71,19 +58,19 @@ static ubxChecksum calcFletcherChecksum( const ubxMsg msg ) {
     updateUbxChecksum( msg.type.id, &result );
 
     // then the length, little-endian...
-    updateUbxChecksum( (byte) (msg.body.size), &result );
-    updateUbxChecksum( (byte) (msg.body.size >> 8), &result );
+    updateUbxChecksum( (byte) (size_slBuffer( msg.body )), &result );
+    updateUbxChecksum( (byte) (size_slBuffer( msg.body ) >> 8), &result );
 
     // and finally the body itself...
-    for( int i = 0; i < msg.body.size; i++ ) {
-        updateUbxChecksum( msg.body.buffer[i], &result );
+    for( int i = 0; i < size_slBuffer( msg.body ); i++ ) {
+        updateUbxChecksum( buffer_slBuffer( msg.body )[i], &result );
     }
 
     return result;
 }
 
 
-ubxMsg createUbxMsg( ubxType type, sl_buffer body ) {
+ubxMsg createUbxMsg( ubxType type, slBuffer *body ) {
 
     ubxMsg result;
 
@@ -120,7 +107,7 @@ static bool readUbxBytes( int fdPort, byte *buffer, int *count, size_t max, long
 #define SYNC2 (0x62)
 static ubxMsg rcvUbxMsg( int fdPort ) {
 
-    ubxMsg result = { NotPresent, {0, 0}, {NULL, 0, false}, {0, 0}};
+    ubxMsg result = { NotPresent, {0, 0}, NULL, {0, 0}};
 
     long long startTime = currentTimeMs();
     speedInfo si = getSpeedInfo( fdPort );
@@ -159,8 +146,8 @@ static ubxMsg rcvUbxMsg( int fdPort ) {
         size_t length = buff[0] | (buff[1] << 8);
 
         // now get the body...
-        result.body = allocateSlBuffer( length );
-        readUbxBytes( fdPort, result.body.buffer, &count, length, startTime, charWaitNs );
+        result.body = create_slBuffer( length, LittleEndian );
+        readUbxBytes( fdPort, buffer_slBuffer( result.body ), &count, length, startTime, charWaitNs );
         result.checksum = calcFletcherChecksum( result );  // this calculates what the checksum SHOULD be...
         if( count >= length ) {
 
@@ -172,7 +159,7 @@ static ubxMsg rcvUbxMsg( int fdPort ) {
                 break;
             }
         }
-        freeSlBuffer( result.body );
+        free( result.body );
     }
 
     return result;
@@ -182,11 +169,19 @@ static ubxMsg rcvUbxMsg( int fdPort ) {
 int sendUbxMsg( int fdPort, ubxMsg msg ) {
 
     // first we send out our sync bytes, message type, and body length...
-    byte buff[6] = {SYNC1, SYNC2, msg.type.class, msg.type.id, (byte) msg.body.size, (byte)(msg.body.size >> 8)};
+    byte buff[6] = { SYNC1,
+                     SYNC2,
+                     msg.type.class,
+                     msg.type.id,
+                     (byte) size_slBuffer( msg.body ),
+                     (byte)(size_slBuffer( msg.body ) >> 8)
+    };
+
     if( 6 != write( fdPort, buff, 6 ) ) return -1;
 
     // then we send out the body itself...
-    if( msg.body.size != write( fdPort, msg.body.buffer, msg.body.size ) ) return -1;
+    if( size_slBuffer( msg.body ) != write( fdPort, buffer_slBuffer( msg.body ), size_slBuffer( msg.body ) ) )
+        return -1;
 
     // and finally, out goes the checksum...
     byte buffChk[2] = {msg.checksum.ck_a, msg.checksum.ck_b};
@@ -253,7 +248,7 @@ ubxPollResponse pollUbx( int fdPort, ubxMsg pollMsg ) {
 
                 // we might have received a NAK (in the case of an invalid poll message being sent),
                 // or maybe we got complete garbage, so we distinguish between them...
-                if( cmpUbxType( respMsg.type, ubxTypeNAK ) )
+                if( cmpUbxType( respMsg.type, ut_ACK_NAK ) )
                     result.state = NAK;
                 else
                     result.state = UnexpectedPollResponse;
@@ -268,20 +263,121 @@ ubxPollResponse pollUbx( int fdPort, ubxMsg pollMsg ) {
 }
 
 
+extern changeBaudResponse changeBaudRate( int fdPort, unsigned int newBaudRate, bool verbose ) {
+
+    // first we poll for the current configuration...
+    ubxPollResponse current
+            = pollUbx( fdPort, createUbxMsg( ut_CFG_PRT, init_slBuffer( LittleEndian, 1 /* UBX_CFG_PRT_UART_ID */ ) ) );
+
+    // update the baud rate in the configuration...
+    put_uint32_slBuffer( current.response.body, 8, newBaudRate );
+
+    // send out the message to change the baud rate...
+    int result = sendUbxMsg( fdPort, createUbxMsg( ut_CFG_PRT, current.response.body ) );
+
+    // change our host's baud rate to the new one...
+    result = setTermOptionsBaud( fdPort, newBaudRate );
+
+    // now get our response message...
+    ubxMsg resp = rcvUbxMsg( fdPort );
+
+    printf( "Received message status: %d\n", resp.state );
+
+    return ChangeBaudOk;
+}
+
+
+// Corrects the raw time as reported by the GPS.
+static void correctTime( pvt_fix *fix ) {
+
+    // no matter what, we're gonna add the nanoseconds correction to the seconds...
+    fix->second += ((int64_t) fix->nanoseconds_correction) * 1e-9;
+
+    // if the result is positive, we're done...
+    if( fix->second >= 0.0 ) return;
+
+    // otherwise, the time was rounded up and now we have to undo that...
+    fix->second += 60;  // fix the seconds wrap-around - note this is wrong for leap-seconds, but how to fix that?
+
+    // now fix the minutes...
+    fix->minute--;
+    if( fix->minute >= 0 ) return;
+    fix->minute += 60;
+
+    // then the hours...
+    fix->hour--;
+    if( fix->hour >= 0 ) return;
+    fix->hour += 24;
+
+    // we rounded to the next day - sheesh, fix it...
+    fix->day--;
+    if( fix->day >= 1 ) return;
+
+    // oh oh - we rounded up from the preceding month!
+    // now this starts to get a little complicated - we have to know the days in a month, which means leap years...
+    fix->month--;
+    if( fix->month >= 1) {
+        fix->day = daysInMonth((unsigned) fix->year, (unsigned) fix->month);
+        return;
+    }
+
+    // sheesh - we even rounded up the year!
+    fix->year--;
+    fix->month = 12;
+    fix->day = daysInMonth( (unsigned) fix->year, (unsigned) fix->month );
+}
+
+
+extern int getFix( int fdPort, bool verbose, pvt_fix *fix ) {
+
+    // get a fix from the GPS...
+    int result = sendUbxMsg( fdPort, createUbxMsg( ut_NAV_PVT, create_slBuffer( 0, LittleEndian ) ) );
+    ubxMsg resp = rcvUbxMsg( fdPort );
+
+    if( (resp.state == Valid) && (size_slBuffer( resp.body ) >= 92) ) {
+
+        fix->year                      = get_uint16_slBuffer( resp.body, 4 );
+        fix->month                     = get_uint8_slBuffer( resp.body, 6 );
+        fix->day                       = get_uint8_slBuffer( resp.body, 7 );
+        fix->hour                      = get_uint8_slBuffer( resp.body, 8);
+        fix->minute                    = get_uint8_slBuffer( resp.body, 9 );
+        fix->second                    = get_uint8_slBuffer( resp.body, 10);
+        fix->nanoseconds_correction    = get_int32_slBuffer( resp.body, 16);
+        fix->time_accuracy_ns          = get_uint32_slBuffer( resp.body, 12 );
+        fix->date_valid                = isBitSet_slBits( get_uint8_slBuffer( resp.body, 11 ), 0);
+        fix->time_valid                = isBitSet_slBits( get_uint8_slBuffer( resp.body, 11 ), 1);
+        fix->time_resolved             = isBitSet_slBits( get_uint8_slBuffer( resp.body, 11 ), 2);
+        fix->fix_is_3d                 = (get_uint8_slBuffer( resp.body, 20) == 3);
+        fix->fix_valid                 = isBitSet_slBits( get_uint8_slBuffer( resp.body, 21 ), 0);
+        fix->number_of_satellites_used = get_uint8_slBuffer( resp.body, 23);
+        fix->latitude_deg              = get_int32_slBuffer( resp.body, 28 ) * 1e-7;
+        fix->longitude_deg             = get_int32_slBuffer( resp.body, 24 ) * 1e-7;
+        fix->height_above_ellipsoid_mm = get_int32_slBuffer( resp.body, 32 );
+        fix->height_above_sea_level_mm = get_int32_slBuffer( resp.body, 36 );
+
+        correctTime( fix );
+
+        return 0;
+    }
+
+    return -1;
+}
+
+
 extern void test( int fdPort ) {
 
     ubxType type = { UBX_MON, UBX_MON_VER };
-    sl_buffer body = allocateSlBuffer( 0 );
+    slBuffer* body = create_slBuffer( 0, LittleEndian );
     ubxMsg msg = createUbxMsg( type, body );
     ubxPollResponse result = pollUbx( fdPort, msg );
     if( result.state == Ok ) {
 
         // decode the message and print the results...
-        char* buf = (char *) result.response.body.buffer;
+        char* buf = (char *) buffer_slBuffer( result.response.body );
 
         printf( "SW Version: %s\n", buf );
         printf( "HW Version: %s\n", buf + 30 );
-        for( int i = 40; i < (int) result.response.body.size; i += 30 ) {
+        for( int i = 40; i < (int) size_slBuffer( result.response.body ); i += 30 ) {
             printf( "Extra info: %s\n", buf + i );
         }
     }

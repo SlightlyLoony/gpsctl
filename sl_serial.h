@@ -40,6 +40,8 @@ int getBaudRateCookie( int baudRate );
 #define STO_INVALID_NUMBER_OF_STOP_BITS 4
 int setTermOptions( int fdPort, int baud, int dataBits, int stopBits, bool parityEnable, bool odd );
 
+int setTermOptionsBaud( int fdPort, int baud );
+
 #define SBR_SET_SYNC        0
 #define SBR_SET_NOSYNC      1
 #define SBR_INVALID         2

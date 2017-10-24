@@ -21,6 +21,7 @@
 #include <errno.h>
 #include "sl_general.h"
 #include "sl_serial.h"
+#include "sl_bits.h"
 
 
 // Returns speed information for the given port.
@@ -31,13 +32,14 @@ extern speedInfo getSpeedInfo( int fdPort ) {
     result.baudRate = getBaudRate( (int) cfgetispeed( &options ) );
     result.nsBit = 1000000000 / result.baudRate;
     int stopBits = (options.c_cflag & CSTOPB) ? 2 : 1;
-    tcflag_t mask = CSIZE;
-    tcflag_t ccfl = options.c_cflag;
-    while( !(mask & 1) ) {
-        mask >>= 1;
-        ccfl >>= 1;
-    }
-    int dataBits = (int) ((ccfl & 0x3) + 5);
+//    tcflag_t mask = CSIZE;
+//    tcflag_t ccfl = options.c_cflag;
+//    while( !(mask & 1) ) {
+//        mask >>= 1;
+//        ccfl >>= 1;
+//    }
+//    int dataBits = (int) ((ccfl & 0x3) + 5);
+    int dataBits = (int) getBitField_slBits( options.c_cflag, CSIZE );
     int bits = stopBits + dataBits;
     result.nsChar = bits * result.nsBit;
     return result;
