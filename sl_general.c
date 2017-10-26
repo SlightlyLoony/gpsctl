@@ -15,7 +15,6 @@
 extern void stackDump( void ) {
     #define STACK_DUMP_SIZE 250
     void *stackFrames[STACK_DUMP_SIZE];
-    char **strings;
 
     int numFrames = backtrace( stackFrames, STACK_DUMP_SIZE );
     backtrace_symbols_fd( stackFrames, numFrames, STDERR_FILENO );
@@ -68,7 +67,7 @@ extern long long max_ll( long long a, long long b ) {
 // Returns the time since the epoch in milliseconds.
 extern long long currentTimeMs() {
     struct timespec tp;
-    int result = clock_gettime( CLOCK_MONOTONIC, &tp );
+    clock_gettime( CLOCK_MONOTONIC, &tp );
     return tp.tv_sec * 1000L + tp.tv_nsec / 1000000L;
 }
 
@@ -102,4 +101,42 @@ extern uint32_t daysInMonth( uint32_t year, uint32_t month ) {
     if( (month == 2) && isLeapYear( year ) )
         result++;
     return result;
+}
+
+
+// Returns a pointer to a newly allocated copy of the given source string.  If the source is NULL, so is the return
+// value.
+extern char* getAllocatedStringCopy( const char *source ) {
+
+    if( !source ) return NULL;
+
+    char *result = safeMalloc( 1 + strlen( source ) );
+    strcpy( result, source );
+    return result;
+}
+
+
+// Prints a message about an error occurring during an invocation of read().
+extern void readErrno( int en ) {
+    printf( "read() ERROR: " );
+    switch( en ) {
+        case EAGAIN:
+            printf( "no data available in non-blocking mode\n" );
+            break;
+        case EBADF:
+            printf( "file descriptor is not valid\n" );
+            break;
+        case EINTR:
+            printf( "interrupted by signal\n" );
+            break;
+        case EIO:
+            printf( "hardware error or trying to read from controlling terminal\n" );
+            break;
+        case EINVAL:
+            printf( "invalid block size or alignment\n" );
+            break;
+        default:
+            printf( "unknown error code (%d)\n", en );
+            break;
+    }
 }

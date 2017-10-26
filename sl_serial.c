@@ -78,11 +78,11 @@ extern int verifySerialDevice( const char *deviceName ) {
 }
 
 
-// Reads a single character from the given serial port, waiting at most the given number of milliseconds.  Returns
+// Reads a single character from the given serial port, waiting at most the given number of millieseconds.  Returns
 // the character read or one of the following values:
 // RSC_TIMED_OUT
 // RSC_READ_ERROR
-extern int readSerialChar( int fdPort, long long nsTimeout ) {
+extern int readSerialChar( int fdPort, long long msTimeout ) {
 
     unsigned char c;
     long long startTime = currentTimeMs();
@@ -93,17 +93,18 @@ extern int readSerialChar( int fdPort, long long nsTimeout ) {
     int sleepyNs = getSpeedInfo( fdPort ).nsChar >> 1;
 
     // keep trying unless we run out of time...
-    while( (currentTimeMs() - startTime) < nsTimeout ) {
+    while( (currentTimeMs() - startTime) < msTimeout ) {
 
         count++;
 
         // try to read a character...
         ssize_t rx_length = read( fdPort, &c, 1 );
 
-        int err = errno;
-
         // if we got an error, tell our caller...
-        if( rx_length < 0 ) return RSC_READ_ERROR;
+        if( (rx_length < 0) && (errno != EAGAIN) ) {
+            readErrno( errno );
+            return RSC_READ_ERROR;
+        }
 
         // if we read a character, return it...
         if( rx_length == 1 ) return (int) c;
@@ -112,8 +113,6 @@ extern int readSerialChar( int fdPort, long long nsTimeout ) {
         // delay a half character time before we try again...
         sleep_ns( sleepyNs );
     }
-
-    long long stopTime = currentTimeMs();
 
     // if we get here, then we timed out...
     return RSC_TIMED_OUT;
@@ -161,8 +160,8 @@ extern int setTermOptionsBaud( int fdPort, int baud ) {
 
     struct termios options;
     tcgetattr( fdPort, &options );
-    int result = cfsetispeed( &options, (speed_t) baudCookie );
-    result = cfsetospeed( &options, (speed_t) baudCookie );
+    cfsetispeed( &options, (speed_t) baudCookie );
+    cfsetospeed( &options, (speed_t) baudCookie );
     tcflush( fdPort, TCIFLUSH );
     tcsetattr( fdPort, TCSANOW, &options );
     return STO_OK;
@@ -312,11 +311,9 @@ extern int setBaudRate( int fdPort, int baudRate, bool synchronize, bool autoRat
             long long start = currentTimeMs();
             speedInfo si = getSpeedInfo( fdPort );
             long long timeout = max_ll( 1000, 200 * si.nsChar / 1000000 ); // max of one second or 200 character times...
-            int charTimeout = si.nsChar >> 1;
             while( (currentTimeMs() - start) < timeout ) {
-                int c = readSerialChar(fdPort, charTimeout );
+                int c = readSerialChar( fdPort, start + timeout - currentTimeMs() );
                 if( c == RSC_READ_ERROR ) {
-                    printf( "Error from read() when reading serial port (ERRNO: %d)!\n", errno );
                     synchronizer( -1, &state );  // close synchronizer...
                     return SBR_PORT_ERROR;
                 }
@@ -349,5 +346,5 @@ extern int setBaudRate( int fdPort, int baudRate, bool synchronize, bool autoRat
     }
 
     // if we get here, it's time to leave...
-    return synchronize ? SBR_SET_NOSYNC : SBR_FAILED_SYNC;
+    return synchronize ? SBR_FAILED_SYNC : SBR_SET_NOSYNC;
 }

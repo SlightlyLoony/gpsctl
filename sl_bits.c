@@ -53,3 +53,12 @@ extern uint64_t getBitField_slBits( uint64_t value, uint64_t mask ) {
 extern bool isBitSet_slBits( uint64_t value, int bitNum ) {
     return (value & bitMasks[ 0x37 & bitNum ]) != 0;
 }
+
+
+// Sets the given bit number in the given value to the value of state (one for true, zero for false).  Returns the
+// resulting value.  Note that only the six LSBs of the bit number (for bits 0..63) are actually used; all other bits
+// in that value are ignored.
+extern uint64_t setBit_slBits( uint64_t value, int bitNum, bool state ) {
+    uint64_t mask = bitMasks[ 0x37 & bitNum];
+    return (value & (~mask)) | (state ? mask : 0);
+}

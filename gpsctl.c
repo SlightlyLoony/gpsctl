@@ -32,13 +32,13 @@
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 // TODO: make my own get_options_long() equivalent, easier to configure?
-// TODO: add change baud rate (still not getting acks for lowering baud, increasing baud I do.  weird!
 // TODO: add save configuration
 // TODO: add set stationary or portable mode
-// TODO: add query (with parameter for what kind) and -j JSON option
 // TODO: add UBX-only synchronizer (so it will synchronize even without NMEA data)
-// TODO: turn NMEA data off while changing baud rate
-// TODO: add turn NMEA data on and off
+// TODO: choose sync type
+// TODO: set antenna and cable length specs
+// TODO: make sure we free any allocated slBuffers!
+// TODO: add needed printfs for verbose mode...
 
 
 // these defines allow compiling on both an OS X development machine and the target Raspberry Pi.  If different
@@ -54,12 +54,14 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <math.h>
 #include "sl_general.h"
 #include "sl_serial.h"
 #include "ublox.h"
+#include "cJSON.h"
 
 
-struct parsed_args {
+typedef struct parsed_args {
     bool verbose;
     bool autobaud;
     char *port;
@@ -70,13 +72,16 @@ struct parsed_args {
     bool version;
     bool report;
     bool echo;
+    bool nmea;
+    bool nmeaState;
+    bool json;
     int echoMax;
     int queryType;
     bool error;
     bool synchronize;
     char *errorMsg;
     bool errorMsgAllocated;
-};
+} parsed_args;
 
 
 static const char *gpsctl_version        = "gpsctl 0.1\n";
@@ -93,11 +98,18 @@ static const char *gpsctl_help = "Options:\n" \
                     "  -B, --newbaud   change the U-Blox baud rate to the specified standard rate\n"
                     "  -s, --sync      synchronize after setting baud rate\n"
                     "  -v, --verbose   get verbose messages\n"
-                    "  -e, --echo      echo human-readable GPS (presumably NMEA) data to the stdout, optionally with a maximum time\n"
+                    "  -e, --echo      echo human-readable GPS (presumably NMEA) data to stdout for 'n' seconds (0 means forever)\n"
                     "  -q, --query     query the GPS for info (see QUERY TYPES below)\n"
+                    "  -j, --json      produces query results in JSON format instead of English\n"
+                    "  -n  --nmea      configure whether the GPS sends NMEA data to the UART (see YES OR NO VALUES below)\n"
                     "\n"
                     "Query types:\n"
-                    "   fix       reports latitude, longitude, altitude, and time with accuracy figures\n";
+                    "   fix       reports latitude, longitude, altitude, and time with accuracy figures\n"
+                    "   version   reports the version information from the GPS\n"
+                    "\n"
+                    "Yes or no values\n"
+                    "   Yes       indicated by an initial character of 'y', 'Y', 't', 'T', or '1'\n"
+                    "   No        indicated by anything else\n";
 
 
 static void showHelp( void )    {
@@ -123,8 +135,10 @@ static struct option options[] = {
     { "new_baud",    required_argument, 0, 'B' },
     { "verbose",     no_argument,       0, 'v' },
     { "synchronize", no_argument,       0, 's' },
-    { "echo",        optional_argument, 0, 'e' },
+    { "echo",        required_argument, 0, 'e' },
     { "query",       required_argument, 0, 'q' },
+    { "json",        no_argument,       0, 'j' },
+    { "nmea",        required_argument, 0, 'n' },
     { 0,             0,                 0, 0   }
 };
 
@@ -142,7 +156,7 @@ static char* getLongOption( const char shortOption ) {
 
 
 // Helper function to create error messages with the argument embedded.  Always returns -1.
-static int errMsgHelper( char *format, const char *arg, struct parsed_args *parsed_args ) {
+static int errMsgHelper( char *format, const char *arg, parsed_args *parsed_args ) {
     size_t len = strlen( format ) + strlen( arg ) + 10;
     parsed_args->errorMsg = safeMalloc( len );
     snprintf( parsed_args->errorMsg, len - 1, format, arg );
@@ -154,10 +168,7 @@ static int errMsgHelper( char *format, const char *arg, struct parsed_args *pars
 // Parse the given argument, which is presumed to be a string representing a positive integer that is one of the
 // standard baud rates.  If the parsing fails for any reason, the error flag is set, an error message set, and -1
 // returned.
-static int getBaud( const char * arg, struct parsed_args *parsed_args ) {
-
-    int validRates[] = { 50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800,
-                         2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400 };
+static int getBaud( const char * arg, parsed_args *parsed_args ) {
 
     // sanity check...
     if( !arg ) {
@@ -181,7 +192,7 @@ static int getBaud( const char * arg, struct parsed_args *parsed_args ) {
 // Parses the given argument, which is presumed to be a string that is the name of a serial device.  If the specified
 // device does not exist, or is not a serial device, produces an error.  If there were no errors, the device in
 // parsed_args is changed to the argument.  The return value is 0 if there was no error, or -1 if there was an error.
-static int getPort( const char *arg, struct parsed_args *parsed_args ) {
+static int getPort( const char *arg, parsed_args *parsed_args ) {
 
     int vsd = verifySerialDevice( arg );
     if( vsd == VSD_NULL          ) return errMsgHelper( "no serial device was specified",                          arg, parsed_args );
@@ -197,12 +208,13 @@ static int getPort( const char *arg, struct parsed_args *parsed_args ) {
 
 
 static char *query_types[] = {
-        "fix"
+        "fix",
+        "version"
 };
 
 // Parses the given argument and sets queryType in parsed_args to indicate the type.  Returns 0 on success, or -1
 // if the argument wasn't recognized.
-static int getQueryType( const char *arg, struct parsed_args *parsed_args ) {
+static int getQueryType( const char *arg, parsed_args *parsed_args ) {
 
     for( int i = 0; i < sizeof( query_types); i++ ) {
 
@@ -215,7 +227,7 @@ static int getQueryType( const char *arg, struct parsed_args *parsed_args ) {
 }
 
 
-static int getEcho( const char *arg, struct parsed_args *parsed_args ) {
+static int getEcho( const char *arg, parsed_args *parsed_args ) {
 
     // get any max time parameter...
     parsed_args->echoMax = 0;
@@ -232,49 +244,58 @@ static int getEcho( const char *arg, struct parsed_args *parsed_args ) {
 }
 
 
+// Reads the argument (first character only) to see if it represents a true or a false, then sets that value.
+static void getBool( const char *arg, bool *boolArg ) {
+    char *answer = strchr( "yYtT1", *arg );
+    *boolArg = (answer != NULL);
+}
+
+
 // Process program options.  Returns true on success, false if there was any error.
-bool getOptions( int argc, char *argv[], struct parsed_args *parsed_args ) {
+static bool getOptions( int argc, char *argv[], parsed_args *pa ) {
 
     int option_index;
     int opt;
 
     // set our default values...
-    parsed_args->port = "/dev/serial0";
-    parsed_args->baud = 9600;
+    pa->port = "/dev/serial0";
+    pa->baud = 9600;
 
     // process each option on the command line...
-    while( (opt = getopt_long(argc, argv, ":VUp:b:arB:vsq:e::?", options, &option_index)) != -1 ) {
+    while( (opt = getopt_long(argc, argv, ":VUp:b:arB:vsn:jq:e:?", options, &option_index)) != -1 ) {
 
         if (opt == -1) break;  // detect end of options...
 
         switch( opt ) {
-            case 0:   /* get here if long option sets a flag */              break;  // naught to do here...
-            case 'b': parsed_args->baud = getBaud( optarg, parsed_args );    break;  // -b or --baud
-            case 'B': parsed_args->newbaud = getBaud( optarg, parsed_args ); break;  // -B or --newbaud
-            case '?': parsed_args->help = true;                              break;  // -? or --help
-            case 'U': parsed_args->usage = true;                             break;  // -U or --usage
-            case 'V': parsed_args->version = true;                           break;  // -V or --version
-            case 'p': getPort( optarg, parsed_args);                         break;  // -p or --port
-            case 'v': parsed_args->verbose = true;                           break;  // -v or --verbose
-            case 's': parsed_args->synchronize = true;                       break;  // -s or --sync
-            case 'a': parsed_args->autobaud = true;                          break;  // -a or --autobaud
-            case 'e': getEcho( optarg, parsed_args );                        break;  // -e or --echo
-            case 'q': getQueryType( optarg, parsed_args );                   break;  // -q or --query
-            case ':':                                                        break;  // required argument is missing
-            default:                                                         break;
+            case 0:   /* get here if long option sets a flag */           break;  // naught to do here...
+            case 'b': pa->baud = getBaud( optarg, pa );                   break;  // -b or --baud
+            case 'B': pa->newbaud = getBaud( optarg, pa );                break;  // -B or --newbaud
+            case '?': pa->help = true;                                    break;  // -? or --help
+            case 'U': pa->usage = true;                                   break;  // -U or --usage
+            case 'V': pa->version = true;                                 break;  // -V or --version
+            case 'p': getPort( optarg, pa);                               break;  // -p or --port
+            case 'v': pa->verbose = true;                                 break;  // -v or --verbose
+            case 's': pa->synchronize = true;                             break;  // -s or --sync
+            case 'a': pa->autobaud = true;                                break;  // -a or --autobaud
+            case 'e': getEcho( optarg, pa );                              break;  // -e or --echo
+            case 'q': getQueryType( optarg, pa );                         break;  // -q or --query
+            case 'j': pa->json = true;                                    break;  // -j or --json
+            case 'n': pa->nmea = true; getBool( optarg, &pa->nmeaState ); break;  // -n or --nmea
+            case ':':                                                     break;  // required argument is missing
+            default:                                                      break;
         }
 
         // check for an error on the option we just processed...
-        if( parsed_args->errorMsg ) {
-            parsed_args->error = true;
+        if( pa->errorMsg ) {
+            pa->error = true;
             printf("Error in program option -%c or --%s: %s\n", opt,
-                   getLongOption((const char) opt), parsed_args->errorMsg );
-            if( parsed_args->errorMsgAllocated ) free( parsed_args->errorMsg );
-            parsed_args->errorMsg = NULL;
+                   getLongOption((const char) opt), pa->errorMsg );
+            if( pa->errorMsgAllocated ) free( pa->errorMsg );
+            pa->errorMsg = NULL;
         }
     }
 
-    return !parsed_args->error;
+    return !pa->error;
 }
 
 
@@ -283,7 +304,6 @@ bool getOptions( int argc, char *argv[], struct parsed_args *parsed_args ) {
 //   *state == NULL:            initializes its state and sets *state to point to it, returns false
 //   *state != NULL && c >= 0:  updates the state, if synchronized returns true, sets *state to NULL
 //   *state != NULL && c < 0:   releases resources, sets *state to NULL, returns false
-#define NBRS ((nbrsState*)(*state))
 static bool NMEABaudRateSynchronizer( const char c, void **state ) {
 
     typedef struct nbrsState {
@@ -291,11 +311,15 @@ static bool NMEABaudRateSynchronizer( const char c, void **state ) {
         int cksm;      // the running checksum (actually longitudnal parity)...
         char last[3];  // the three most recently received characters...
     } nbrsState;
+    
+    // convenience variable...
+    nbrsState *nbrs = ((nbrsState*)(*state));
 
     // if we have no state, initialize it...
     if( !*state ) {
         *state = safeMalloc( sizeof( nbrsState ) );
-        NBRS->inLine = false;
+        nbrs = ((nbrsState*)(*state));
+        nbrs->inLine = false;
         return false;
     }
 
@@ -307,21 +331,21 @@ static bool NMEABaudRateSynchronizer( const char c, void **state ) {
     }
 
     // otherwise, update our state...
-    if( NBRS->inLine ) {
+    if( nbrs->inLine ) {
         if( (c == '\r') || (c == '\n') ) {
-            if( NBRS->last[0] == '*') {
-                int un = hex2int( NBRS->last[1] );
+            if( nbrs->last[0] == '*') {
+                int un = hex2int( nbrs->last[1] );
                 if( un >= 0 ) {
-                    int ln = hex2int( NBRS->last[2] );
+                    int ln = hex2int( nbrs->last[2] );
                     if( ln >= 0 ) {
                         int ck = (un << 4) | ln;
 
                         // correct checksum for the last three characters received...
-                        NBRS->cksm ^= NBRS->last[0];
-                        NBRS->cksm ^= NBRS->last[1];
-                        NBRS->cksm ^= NBRS->last[2];
+                        nbrs->cksm ^= nbrs->last[0];
+                        nbrs->cksm ^= nbrs->last[1];
+                        nbrs->cksm ^= nbrs->last[2];
 
-                        if( ck == NBRS->cksm ) {
+                        if( ck == nbrs->cksm ) {
                             free( *state );
                             *state = NULL;
                             return true;
@@ -329,18 +353,18 @@ static bool NMEABaudRateSynchronizer( const char c, void **state ) {
                     }
                 }
             }
-            NBRS->inLine = false;
+            nbrs->inLine = false;
         }
         else {
-            NBRS->cksm ^= c;
-            NBRS->last[0] = NBRS->last[1];
-            NBRS->last[1] = NBRS->last[2];
-            NBRS->last[2] = c;
+            nbrs->cksm ^= c;
+            nbrs->last[0] = nbrs->last[1];
+            nbrs->last[1] = nbrs->last[2];
+            nbrs->last[2] = c;
         }
     }
     else if( c == '$' ) {
-        NBRS->inLine = true;
-        NBRS->cksm = 0;
+        nbrs->inLine = true;
+        nbrs->cksm = 0;
     }
 
     // if we're not there yet...
@@ -368,7 +392,20 @@ static int openSerialPort( struct parsed_args *parsed_args ) {
                           NMEABaudRateSynchronizer, parsed_args->verbose );
     int expected = (parsed_args->autobaud || parsed_args->synchronize) ? SBR_SET_SYNC : SBR_SET_NOSYNC;
     if( result != expected ) {
-        printf( "Error when setting baud rate (code: %d)!\n", result );
+        switch( result ) {
+            case SBR_INVALID:
+                printf( "Baud rate is invalid or not specified!\n" );
+                break;
+            case SBR_FAILED_SYNC:
+                printf( "Failed to synchronize serial port receiver!\n" );
+                break;
+            case SBR_PORT_ERROR:
+                printf( "Error reading from serial port!\n" );
+                break;
+            default:
+                printf( "Unknown error when setting baud rate (code: %d)!\n", result );
+                break;
+        }
         close( fdPort );
         exit( 1 );
     }
@@ -382,13 +419,11 @@ static void echo( int fdPort, bool verbose, int maxSeconds ) {
     if( verbose ) printf( "Starting echo...\n" );
 
     // figure out our timing...
-    speedInfo si = getSpeedInfo( fdPort );
     long long startTime = currentTimeMs();
     long long maxEchoMS = 1000 * maxSeconds;
-    int maxCharNS = si.nsChar >> 1;
 
     while( (maxSeconds == 0) || ((currentTimeMs() - startTime) < maxEchoMS) ) {
-        int c = readSerialChar( fdPort, maxCharNS );
+        int c = readSerialChar( fdPort, 1000 );
         if( c >= 0 ) printf( "%c", c );
     }
 
@@ -399,24 +434,152 @@ static void echo( int fdPort, bool verbose, int maxSeconds ) {
 // Change baud rate on GPS and on host port...
 static void newBaud( int fdPort, int newBaud, bool verbose ) {
 
-    changeBaudResponse resp = changeBaudRate( fdPort, newBaud, verbose );
+    changeBaudResponse resp = changeBaudRate( fdPort, (unsigned) newBaud, verbose );
+    if( resp == ChangeBaudFailure ) {
+        printf( "Failed to change baud rate!" );
+        exit(1);
+    }
 }
 
 
-static void fixQuery( int fdPort, bool verbose ) {
+// Outputs a fix query, in English or JSON.
+static void fixQuery( int fdPort, bool json, bool verbose ) {
 
     pvt_fix fix = {0}; // zeroes all elements...
-    int result = getFix( fdPort, verbose, &fix );
+    reportResponse result = getFix( fdPort, verbose, &fix );
+    double msl_height_feet = 0.00328084 * fix.height_above_sea_level_mm;
+    double height_accuracy_feet = 0.00328084 * fix.height_accuracy_mm;
+    double horizontal_accuracy_feet = 0.00328084 * fix.horizontal_accuracy_mm;
+    double speed_mph = fix.ground_speed_mm_s * 0.00223694;
+    double speed_accuracy_mph = fix.ground_speed_accuracy_mm_s * 0.00223694;
+    if( result == reportOK ) {
+        if( json ) {
+            cJSON *root;
+            cJSON *objFix;
+            cJSON *time;
+            root = cJSON_CreateObject();
+
+            cJSON_AddItemToObject( root, "fix", objFix = cJSON_CreateObject() );
+            cJSON_AddNumberToObject( objFix, "latitude_deg", fix.latitude_deg );
+            cJSON_AddNumberToObject( objFix, "longitude_deg", fix.longitude_deg );
+            cJSON_AddNumberToObject( objFix, "height_above_ellipsoid_mm", fix.height_above_ellipsoid_mm );
+            cJSON_AddNumberToObject( objFix, "height_above_mean_sea_level_mm", fix.height_above_sea_level_mm );
+            cJSON_AddNumberToObject( objFix, "horizontal_accuracy_mm", fix.horizontal_accuracy_mm );
+            cJSON_AddNumberToObject( objFix, "height_accuracy_mm", fix.height_accuracy_mm );
+            cJSON_AddNumberToObject( objFix, "ground_speed_mm_sec", fix.ground_speed_mm_s );
+            cJSON_AddNumberToObject( objFix, "ground_speed_accuracy_mm_sec", fix.ground_speed_accuracy_mm_s );
+            cJSON_AddNumberToObject( objFix, "heading_deg", fix.heading_deg );
+            cJSON_AddNumberToObject( objFix, "heading_accuracy_deg", fix.heading_accuracy_deg );
+            cJSON_AddBoolToObject( objFix, "valid", fix.fix_valid );
+            cJSON_AddBoolToObject( objFix, "3d", fix.fix_is_3d );
+
+            cJSON_AddNumberToObject( root, "number_of_satellites_used", fix.number_of_satellites_used );
+
+            cJSON_AddItemToObject( root, "time", time = cJSON_CreateObject() );
+            cJSON_AddNumberToObject( time, "month", fix.month );
+            cJSON_AddNumberToObject( time, "day", fix.day );
+            cJSON_AddNumberToObject( time, "year", fix.year );
+            cJSON_AddNumberToObject( time, "hour", fix.hour );
+            cJSON_AddNumberToObject( time, "minute", fix.minute );
+            cJSON_AddNumberToObject( time, "second", fix.second );
+            cJSON_AddNumberToObject( time, "accuracy_ns", fix.time_accuracy_ns );
+            cJSON_AddBoolToObject( time, "valid", fix.time_valid );
+            cJSON_AddBoolToObject( time, "resolved", fix.time_resolved );
+
+            char *jsonStr = cJSON_PrintUnformatted( root );
+            printf( "%s\n", jsonStr );
+
+            cJSON_Delete( root );
+        }
+        else {
+            if( fix.time_resolved && fix.time_valid && fix.date_valid )
+                printf( " Time (UTC): %02d/%02d/%04d %02d:%02d:%02.0f (mm/dd/yyyy hh:mm:ss)\n",
+                        fix.month, fix.day, fix.year, fix.hour, fix.minute, fix.second );
+            else
+                printf( " Time (UTC): not resolved or not valid\n" );
+            if( fix.fix_valid ) {
+                printf( "   Latitude: %12.8f %c\n", fabs(fix.latitude_deg), (fix.latitude_deg < 0) ? 'S' : 'N');
+                printf( "  Longitude: %12.8f %c\n", fabs(fix.longitude_deg), (fix.longitude_deg < 0) ? 'W' : 'E');
+                if( fix.fix_is_3d )
+                    printf( "   Altitude: %.3f feet\n", msl_height_feet);
+                else
+                    printf( "   Altitude: unknown\n" );
+                printf( "     Motion: %.3f mph at %.3f degrees heading\n", speed_mph, fix.heading_deg);
+            }
+            else
+                printf( "        Fix: invalid\n" );
+            printf( " Satellites: %d (used for computing this fix)\n", fix.number_of_satellites_used );
+            printf( "   Accuracy: time (%d ns), height (+/-%.3f feet), position (+/-%.3f feet), heading(+/-%.3f degrees), speed(+/-%.3f mph)\n",
+                    fix.time_accuracy_ns, height_accuracy_feet, horizontal_accuracy_feet, fix.heading_accuracy_deg, speed_accuracy_mph );
+        }
+    }
+    else {
+        printf( "Problem getting fix information from GPS!" );
+        exit(1);
+    }
 }
 
 
-// query the GPS for different things.
-static void query( int fdPort, int queryType, bool verbose ) {
+// Outputs a version query, in English or JSON.
+static void versionQuery( int fdPort, bool json, bool verbose ) {
+
+    ubxVersion version = {0};  // zeroes all elements...
+    reportResponse result = getVersion( fdPort, verbose, &version );
+
+    if( result == reportOK ) {
+
+        if( json ) {
+
+            cJSON *root;
+            root = cJSON_CreateObject();
+            cJSON_AddItemToObject( root, "software_version", cJSON_CreateString( version.software ) );
+            cJSON_AddItemToObject( root, "hardware_version", cJSON_CreateString( version.hardware ) );
+            cJSON_AddItemToObject( root, "extensions",
+                                   cJSON_CreateStringArray( (const char**) version.extensions, version.number_of_extensions ) );
+
+            char *jsonStr = cJSON_PrintUnformatted( root );
+            printf( "%s\n", jsonStr );
+
+            cJSON_Delete( root );
+        }
+        else {
+            printf( "Software version: %s\n", version.software );
+            free( version.software );
+            printf( "Hardware version: %s\n", version.hardware );
+            free( version.hardware );
+            char **ptr = version.extensions;
+            while( (*ptr) != NULL ) {
+                printf( "       Extension: %s\n", *ptr );
+                free( (*ptr) );
+                ptr++;
+            }
+        }
+    }
+    else {
+        printf( "Problem getting version information from GPS!" );
+        exit(1);
+    }
+}
+
+
+// Query the GPS for different things.
+static void query( int fdPort, int queryType, bool json, bool verbose ) {
 
     switch( queryType ) {
 
-        case 1: fixQuery( fdPort, verbose ); break;  // "fix"
+        case 1: fixQuery( fdPort, json, verbose ); break;  // "fix"
+        case 2: versionQuery( fdPort, json, verbose );
         default: break;
+    }
+}
+
+
+// Set whether the GPS emits NMEA data on the UART...
+static void configureNmea( int fdPort, bool verbose, bool nmeaOn ) {
+    configResponse resp = setNmeaData( fdPort, verbose, nmeaOn );
+    if( resp == configError ) {
+        printf( "Could not configure NMEA data!\n" );
+        exit(1);
     }
 }
 
@@ -424,20 +587,20 @@ static void query( int fdPort, int queryType, bool verbose ) {
 // The entry point for gpsctl...
 int main( int argc, char *argv[] ) {
 
-    struct parsed_args parsed_args = {.verbose = false };  // initializes all members to zeroes...
+    struct parsed_args pas = {.verbose = false };  // initializes all members to zeroes...
+    if( getOptions( argc, argv, &pas ) ) {
 
-    if( getOptions( argc, argv, &parsed_args ) ) {
-
-        if( parsed_args.version ) showVersion();
-        if( parsed_args.usage   ) showUsage();
-        if( parsed_args.help    ) showHelp();
+        if( pas.version ) showVersion();
+        if( pas.usage   ) showUsage();
+        if( pas.help    ) showHelp();
 
         // open and set up our serial port...
-        int fdPort = openSerialPort( &parsed_args );
+        int fdPort = openSerialPort( &pas );
 
-        if( parsed_args.queryType ) query( fdPort, parsed_args.queryType, parsed_args.verbose );
-        if( parsed_args.newbaud   ) newBaud( fdPort, parsed_args.newbaud, parsed_args.verbose );
-        if( parsed_args.echo      ) echo( fdPort, parsed_args.verbose, parsed_args.echoMax );
+        if( pas.nmea      ) configureNmea( fdPort, pas.verbose, pas.nmeaState );
+        if( pas.queryType ) query( fdPort, pas.queryType, pas.json, pas.verbose );
+        if( pas.newbaud   ) newBaud( fdPort, pas.newbaud, pas.verbose );
+        if( pas.echo      ) echo( fdPort, pas.verbose, pas.echoMax );
 
         close( fdPort );
         exit( 0 );
