@@ -48,12 +48,12 @@ extern slBuffer* init_slBuffer_int( size_t size, Endiness endiness, ... ) {
 
     if( size != 0 ) {
         va_list argPtr;
-        va_start(argPtr, endiness);
+        va_start( argPtr, endiness );
         for (int i = 0; i < size; i++) {
-            byte b = (byte) va_arg(argPtr, int);
+            byte b = (byte) va_arg( argPtr, int );
             result->buffer[i] = b;
         }
-        va_end(argPtr);
+        va_end( argPtr );
     }
     return result;
 }

@@ -55,6 +55,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <math.h>
+#include "sl_options.h"
 #include "sl_general.h"
 #include "sl_serial.h"
 #include "ublox.h"
@@ -82,6 +83,28 @@ typedef struct parsed_args {
     char *errorMsg;
     bool errorMsgAllocated;
 } parsed_args;
+
+struct clientData_slOptions {
+    bool verbose;
+    bool autobaud;
+    char *port;
+    int baud;
+    int newbaud;
+    bool usage;
+    bool help;
+    bool version;
+    bool report;
+    bool echo;
+    bool nmea;
+    bool nmeaState;
+    bool json;
+    int echoMax;
+    int queryType;
+    bool error;
+    bool synchronize;
+    char *errorMsg;
+    bool errorMsgAllocated;
+};
 
 
 static const char *gpsctl_version        = "gpsctl 0.1\n";
@@ -121,6 +144,65 @@ static void showHelp( void )    {
 
 static void showVersion( void ) { printf( gpsctl_version ); }
 static void showUsage( void )   { printf( gpsctl_usage );   }
+
+
+
+static procResult_slOptions procPort( char, char*, clientData_slOptions* );
+
+
+static optionDef_slOptions new_options[] = {
+  //  long       short  id  argtype      procfunc    cnstrfunc
+    { "help",     '?', '?', argNone,     NULL,       NULL },
+    { "version",  'V', 'V', argNone,     NULL,       NULL },
+    { "usage",    'U', 'U', argNone,     NULL,       NULL },
+    { "port",     'p', 'p', argRequired, procPort,   NULL },
+    { "verbose",  'v', 'v', argNone,     NULL,       NULL },
+    { "autobaud", 'a', 'a', argNone,     NULL,       NULL },
+    { NULL }
+};
+
+
+// Helper function to create error messages with the argument embedded.  Always returns -1.
+static procResult_slOptions msgHelper( char *format, const char *arg, optProcRC_slOptions rc ) {
+    procResult_slOptions rv;
+    rv.rc = rc;
+    size_t len = strlen( format ) + strlen( arg ) + 10;
+    slBuffer* buff = create_slBuffer( len, BigEndian );
+    snprintf( (char*) buffer_slBuffer( buff ), len - 1, format, arg );
+    return rv;
+}
+
+
+static procResult_slOptions procPort( char id, char* arg, clientData_slOptions* clientData ) {
+
+    procResult_slOptions rv = { optProcNULL, NULL };
+
+    int vsd = verifySerialDevice( arg );
+    switch( vsd ) {
+        case VSD_IS_SERIAL:
+            clientData->port = arg;
+            rv.rc = optProcOk;
+            return rv;
+        case VSD_NULL:
+            return msgHelper( "no serial device was specified",                          arg, optProcError );
+        case VSD_NOT_TERMINAL:
+            return msgHelper( "the specified device (\"%s\") is not a terminal",         arg, optProcError );
+        case VSD_CANT_OPEN:
+            return msgHelper( "the specified device (\"%s\") cannot be opened",          arg, optProcError );
+        case VSD_NONEXISTENT:
+            return msgHelper( "the specified device (\"%s\") doesn't exist",             arg, optProcError );
+        case VSD_NOT_CHARACTER:
+            return msgHelper( "the specified device (\"%s\") is not a character device", arg, optProcError );
+        case VSD_NOT_DEVICE:
+            return msgHelper( "the specified device (\"%s\") is not a device",           arg, optProcError );
+        default:
+            *arg++ = (char)('0' + vsd );
+            *arg = 0;
+            return msgHelper( "for unknown reasons (code *s)",                           arg, optProcError );
+    }
+}
+
+
 
 
 // Used by getopt_long to parse long options.  Note that we're using it basically to map long options to short
@@ -587,7 +669,13 @@ static void configureNmea( int fdPort, bool verbose, bool nmeaOn ) {
 // The entry point for gpsctl...
 int main( int argc, char *argv[] ) {
 
+    clientData_slOptions clientData;
+    psloConfig config = { new_options, &clientData, false };
+    psloResponse resp = process_slOptions( argc, argv, &config );
+
     struct parsed_args pas = {.verbose = false };  // initializes all members to zeroes...
+
+
     if( getOptions( argc, argv, &pas ) ) {
 
         if( pas.version ) showVersion();
@@ -603,8 +691,8 @@ int main( int argc, char *argv[] ) {
         if( pas.echo      ) echo( fdPort, pas.verbose, pas.echoMax );
 
         close( fdPort );
-        exit( 0 );
+        exit( EXIT_SUCCESS );
     }
     printf( "Errors prevented gpsctl from running..." );
-    exit( 1 );
+    exit( EXIT_FAILURE );
 }

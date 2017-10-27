@@ -1,1 +1,1 @@
--v -b 9600 -a -e 2
+-p /dev/serial0 -va -b 9600 -a -e 2
