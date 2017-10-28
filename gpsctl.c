@@ -46,6 +46,7 @@
 #define _XOPEN_SOURCE 700
 #define _DARWIN_C_SOURCE
 #define _POSIX_C_SOURCE 199309L
+#define _GNU_SOURCE
 
 #include <stdlib.h>
 #include <stdbool.h>
@@ -147,62 +148,97 @@ static void showUsage( void )   { printf( gpsctl_usage );   }
 
 
 
-static procResult_slOptions procPort( char, char*, clientData_slOptions* );
+static parseResult_slOptions parsePort(optionDef_slOptions *, char *, clientData_slOptions *);
+static parseResult_slOptions parseBaud(optionDef_slOptions *, char *, clientData_slOptions *);
 
 
 static optionDef_slOptions new_options[] = {
-  //  long       short  id  argtype      procfunc    cnstrfunc
-    { "help",     '?', '?', argNone,     NULL,       NULL },
-    { "version",  'V', 'V', argNone,     NULL,       NULL },
-    { "usage",    'U', 'U', argNone,     NULL,       NULL },
-    { "port",     'p', 'p', argRequired, procPort,   NULL },
-    { "verbose",  'v', 'v', argNone,     NULL,       NULL },
-    { "autobaud", 'a', 'a', argNone,     NULL,       NULL },
+  //  long       short max  argtype      parsefunc   cnstrfunc    help
+    { "port",     'p',  1,  argRequired, parsePort,  NULL,        "specify current baud rate (default is 9600); any standard rate is allowed" },
+    { "verbose",  'v',  3,  argNone,     NULL,       NULL,        "get verbose messages, use up to three times for more verbosity" },
+    { "autobaud", 'a',  1,  argNone,     NULL,       NULL,        "enable baud rate discovery (if -b is also specified, starting with that rate)" },
+    { "baud",     'b',  1,  argRequired, parseBaud,  NULL,        "specify current baud rate (default is 9600); any standard rate is allowed"},
+    { "newbaud",  'B',  1,  argRequired, parseBaud,  NULL,        "change the U-Blox and host baud rates to the specified standard rate"},
     { NULL }
 };
 
 
-// Helper function to create error messages with the argument embedded.  Always returns -1.
-static procResult_slOptions msgHelper( char *format, const char *arg, optProcRC_slOptions rc ) {
-    procResult_slOptions rv;
-    rv.rc = rc;
-    size_t len = strlen( format ) + strlen( arg ) + 10;
-    slBuffer* buff = create_slBuffer( len, BigEndian );
-    snprintf( (char*) buffer_slBuffer( buff ), len - 1, format, arg );
-    return rv;
+// Helper function to create error messages with given meta pattern, the subpattern, and arguments embedded.  Returns an
+// error response with the given pattern and arguments resolved into a string.  Note that the returned value was
+// allocated, and should be freed when no longer needed.  The meta pattern must specify (in order) a %s to contain the
+// option identity, and another %s to contain the resolved error message.
+static char* msgHelper( char* meta, optionDef_slOptions* def, char *pattern, va_list args) {
+
+    // first we resolve the pattern we were given...
+    char* resolved;
+    vasprintf( &resolved, pattern, args );
+
+    // then we insert that into our pattern...
+    char* errMsg;
+    asprintf( &errMsg, meta , getName_slOptions( def ), resolved );
+    free( resolved );
+    
+    return errMsg;
 }
 
 
-static procResult_slOptions procPort( char id, char* arg, clientData_slOptions* clientData ) {
+static parseResult_slOptions parseMsgHelper( optionDef_slOptions* def, optParseRC_slOptions rc, char *pattern, ... ) {
 
-    procResult_slOptions rv = { optProcNULL, NULL };
+    // get our error message...
+    va_list args;
+    va_start( args, pattern );
+    char* errMsg = msgHelper( "Option parsing problem: [%s] %s", def, pattern, args );
+    va_end( args );
+    
+    // return our bad news...
+    parseResult_slOptions result;
+    result.rc = rc;
+    result.msg = errMsg;
+    return result;
+}
 
+// Test the argument to see if it represents a valid serial port.  On failure, return an error.
+static parseResult_slOptions parsePort(optionDef_slOptions *def, char *arg, clientData_slOptions *clientData) {
+
+    char* id = getName_slOptions( def );
     int vsd = verifySerialDevice( arg );
     switch( vsd ) {
         case VSD_IS_SERIAL:
             clientData->port = arg;
-            rv.rc = optProcOk;
-            return rv;
-        case VSD_NULL:
-            return msgHelper( "no serial device was specified",                          arg, optProcError );
-        case VSD_NOT_TERMINAL:
-            return msgHelper( "the specified device (\"%s\") is not a terminal",         arg, optProcError );
-        case VSD_CANT_OPEN:
-            return msgHelper( "the specified device (\"%s\") cannot be opened",          arg, optProcError );
-        case VSD_NONEXISTENT:
-            return msgHelper( "the specified device (\"%s\") doesn't exist",             arg, optProcError );
-        case VSD_NOT_CHARACTER:
-            return msgHelper( "the specified device (\"%s\") is not a character device", arg, optProcError );
-        case VSD_NOT_DEVICE:
-            return msgHelper( "the specified device (\"%s\") is not a device",           arg, optProcError );
-        default:
-            *arg++ = (char)('0' + vsd );
-            *arg = 0;
-            return msgHelper( "for unknown reasons (code *s)",                           arg, optProcError );
+            parseResult_slOptions result = { optParseOk, NULL };
+            return result;
+        case VSD_NULL:          return parseMsgHelper( def, optParseError, "no serial device was specified", id );
+        case VSD_NOT_TERMINAL:  return parseMsgHelper( def, optParseError, "\"%s\" is not a terminal", id, arg );
+        case VSD_CANT_OPEN:     return parseMsgHelper( def, optParseError, "\"%s\" cannot be opened", id, arg );
+        case VSD_NONEXISTENT:   return parseMsgHelper( def, optParseError, "\"%s\" doesn't exist", id, arg );
+        case VSD_NOT_CHARACTER: return parseMsgHelper( def, optParseError, "\"%s\" is not a character device", id, arg );
+        case VSD_NOT_DEVICE:    return parseMsgHelper( def, optParseError, "\"%s\" is not a device", id, arg );
+        default:                return parseMsgHelper( def, optParseError, "\"%s\" failed for unknown reasons (code %d)", id, arg, vsd );
     }
 }
 
 
+// Parse the given argument, which is presumed to be a string representing a positive integer that is one of the
+// standard baud rates.  If the parsing fails for any reason, return an error
+static parseResult_slOptions parseBaud( optionDef_slOptions* def, char* arg, clientData_slOptions* clientData ) {
+
+    // make sure we can parse the entire argument into an integer...
+    char *endPtr;
+    int baud = (int) strtol( arg, &endPtr, 10 );
+    if( *endPtr != 0 ) return parseMsgHelper( def, optParseError, "the specified baud rate (\"%s\") is not an integer", arg );
+
+    // make sure the result is a valid baud rate...
+    if( getBaudRateCookie( baud ) == 0 )
+        return parseMsgHelper( def, optParseError, "the specified baud rate (\"%s\") is not a valid one (4800, 9600, 19200, etc.", arg );
+
+    // we have a valid baud rate, so stuff it away (for either -b or -B) and return in victory...
+    if( def->shortOpt == 'b' )
+        clientData->baud = baud;
+    else if( def->shortOpt == 'B' )
+        clientData->newbaud = baud;
+    parseResult_slOptions response = { optParseOk, NULL };
+    return response;
+}
 
 
 // Used by getopt_long to parse long options.  Note that we're using it basically to map long options to short
@@ -247,28 +283,6 @@ static int errMsgHelper( char *format, const char *arg, parsed_args *parsed_args
 }
 
 
-// Parse the given argument, which is presumed to be a string representing a positive integer that is one of the
-// standard baud rates.  If the parsing fails for any reason, the error flag is set, an error message set, and -1
-// returned.
-static int getBaud( const char * arg, parsed_args *parsed_args ) {
-
-    // sanity check...
-    if( !arg ) {
-        parsed_args->errorMsg = "missing baud rate argument";
-        return -1;
-    }
-
-    // make sure we can parse the entire argument into an integer...
-    char *endPtr;
-    int baud = (int) strtol( arg, &endPtr, 10 );
-    if( *endPtr != 0 ) return errMsgHelper( "specified baud rate (\"%s\") not an integer", arg, parsed_args );
-
-    // make sure the result is a valid baud rate...
-    if( getBaudRateCookie( baud ) >0 ) return baud;
-
-    // we can only get here if the given baud rate WASN'T a valid one...
-    return errMsgHelper( "specified baud rate (\"%s\") is not valid", arg, parsed_args );
-}
 
 
 // Parses the given argument, which is presumed to be a string that is the name of a serial device.  If the specified
@@ -350,8 +364,8 @@ static bool getOptions( int argc, char *argv[], parsed_args *pa ) {
 
         switch( opt ) {
             case 0:   /* get here if long option sets a flag */           break;  // naught to do here...
-            case 'b': pa->baud = getBaud( optarg, pa );                   break;  // -b or --baud
-            case 'B': pa->newbaud = getBaud( optarg, pa );                break;  // -B or --newbaud
+//            case 'b': pa->baud = getBaud( optarg, pa );                   break;  // -b or --baud
+//            case 'B': pa->newbaud = getBaud( optarg, pa );                break;  // -B or --newbaud
             case '?': pa->help = true;                                    break;  // -? or --help
             case 'U': pa->usage = true;                                   break;  // -U or --usage
             case 'V': pa->version = true;                                 break;  // -V or --version
@@ -671,7 +685,9 @@ int main( int argc, char *argv[] ) {
 
     clientData_slOptions clientData;
     psloConfig config = { new_options, &clientData, false };
-    psloResponse resp = process_slOptions( argc, argv, &config );
+    psloResponse resp = process_slOptions(argc, (const char **) argv, &config );
+
+    exit( EXIT_SUCCESS );
 
     struct parsed_args pas = {.verbose = false };  // initializes all members to zeroes...
 

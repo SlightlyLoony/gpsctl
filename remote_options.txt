@@ -1,1 +1,1 @@
--p /dev/serial0 -va -b 9600 -a -e 2
+--? -p /dev/serial0 -b 9600 -B19200 "this is a test" test1 -vvva test2
