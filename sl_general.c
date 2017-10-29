@@ -59,6 +59,12 @@ extern char* concat( const char *s1, const char *s2 ) {
 }
 
 
+// returns true if the given string pointer is NULL or points to an empty string...
+extern bool strempty( const char* str ) {
+    return (str == NULL) || (*str == 0);
+}
+
+
 extern long long max_ll( long long a, long long b ) {
     return (a > b) ? a : b;
 }

@@ -1,1 +1,1 @@
---? -p /dev/serial0 -b 9600 -B19200 "this is a test" test1 -vvva test2
+--? -p /dev/serial0 -b 96000 -B 19200

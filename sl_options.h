@@ -39,9 +39,9 @@ typedef parseResult_slOptions parse_slOptions( optionDef_slOptions* def, char* a
 typedef cnstrResult_slOptions cnstr_slOptions( char, clientData_slOptions* );  // constraint checking function def
 
 struct optionDef_slOptions {
+    unsigned int            maxCount;   // how many times this option may appear in a command line
     char*                   longOpt;    // optional; the long form of the option
     char                    shortOpt;   // optional; the short form of the option
-    unsigned int            maxCount;   // how many times this option may appear in a command line
     argMode_slOptions       arg;        // controls whether the option has an argument, required or optional
     parse_slOptions*        parse;      // option parsing function, or NULL if not needed
     cnstr_slOptions*        cnstr;      // constraint checking function, or NULL if not needed

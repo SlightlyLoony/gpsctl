@@ -153,13 +153,13 @@ static parseResult_slOptions parseBaud(optionDef_slOptions *, char *, clientData
 
 
 static optionDef_slOptions new_options[] = {
-  //  long       short max  argtype      parsefunc   cnstrfunc    help
-    { "port",     'p',  1,  argRequired, parsePort,  NULL,        "specify current baud rate (default is 9600); any standard rate is allowed" },
-    { "verbose",  'v',  3,  argNone,     NULL,       NULL,        "get verbose messages, use up to three times for more verbosity" },
-    { "autobaud", 'a',  1,  argNone,     NULL,       NULL,        "enable baud rate discovery (if -b is also specified, starting with that rate)" },
-    { "baud",     'b',  1,  argRequired, parseBaud,  NULL,        "specify current baud rate (default is 9600); any standard rate is allowed"},
-    { "newbaud",  'B',  1,  argRequired, parseBaud,  NULL,        "change the U-Blox and host baud rates to the specified standard rate"},
-    { NULL }
+  // max long       short   argtype      parsefunc   cnstrfunc    help
+    { 1, "port",     'p',   argRequired, parsePort,  NULL,        "specify current baud rate (default is 9600); any standard rate is allowed" },
+    { 3, "verbose",  'v',   argNone,     NULL,       NULL,        "get verbose messages, use up to three times for more verbosity" },
+    { 1, "autobaud", 'a',   argNone,     NULL,       NULL,        "enable baud rate discovery (if -b is also specified, starting with that rate)" },
+    { 1, "baud",     'b',   argRequired, parseBaud,  NULL,        "specify current baud rate (default is 9600); any standard rate is allowed"},
+    { 1, "newbaud",  'B',   argRequired, parseBaud,  NULL,        "change the U-Blox and host baud rates to the specified standard rate"},
+    { 0 }
 };
 
 
@@ -200,20 +200,19 @@ static parseResult_slOptions parseMsgHelper( optionDef_slOptions* def, optParseR
 // Test the argument to see if it represents a valid serial port.  On failure, return an error.
 static parseResult_slOptions parsePort(optionDef_slOptions *def, char *arg, clientData_slOptions *clientData) {
 
-    char* id = getName_slOptions( def );
     int vsd = verifySerialDevice( arg );
     switch( vsd ) {
         case VSD_IS_SERIAL:
             clientData->port = arg;
             parseResult_slOptions result = { optParseOk, NULL };
             return result;
-        case VSD_NULL:          return parseMsgHelper( def, optParseError, "no serial device was specified", id );
-        case VSD_NOT_TERMINAL:  return parseMsgHelper( def, optParseError, "\"%s\" is not a terminal", id, arg );
-        case VSD_CANT_OPEN:     return parseMsgHelper( def, optParseError, "\"%s\" cannot be opened", id, arg );
-        case VSD_NONEXISTENT:   return parseMsgHelper( def, optParseError, "\"%s\" doesn't exist", id, arg );
-        case VSD_NOT_CHARACTER: return parseMsgHelper( def, optParseError, "\"%s\" is not a character device", id, arg );
-        case VSD_NOT_DEVICE:    return parseMsgHelper( def, optParseError, "\"%s\" is not a device", id, arg );
-        default:                return parseMsgHelper( def, optParseError, "\"%s\" failed for unknown reasons (code %d)", id, arg, vsd );
+        case VSD_NULL:          return parseMsgHelper( def, optParseError, "no serial device was specified" );
+        case VSD_NOT_TERMINAL:  return parseMsgHelper( def, optParseError, "\"%s\" is not a terminal", arg );
+        case VSD_CANT_OPEN:     return parseMsgHelper( def, optParseError, "\"%s\" cannot be opened", arg );
+        case VSD_NONEXISTENT:   return parseMsgHelper( def, optParseError, "\"%s\" doesn't exist", arg );
+        case VSD_NOT_CHARACTER: return parseMsgHelper( def, optParseError, "\"%s\" is not a character device", arg );
+        case VSD_NOT_DEVICE:    return parseMsgHelper( def, optParseError, "\"%s\" is not a device", arg );
+        default:                return parseMsgHelper( def, optParseError, "\"%s\" failed for unknown reasons (code %d)", arg, vsd );
     }
 }
 
@@ -228,7 +227,7 @@ static parseResult_slOptions parseBaud( optionDef_slOptions* def, char* arg, cli
     if( *endPtr != 0 ) return parseMsgHelper( def, optParseError, "the specified baud rate (\"%s\") is not an integer", arg );
 
     // make sure the result is a valid baud rate...
-    if( getBaudRateCookie( baud ) == 0 )
+    if( getBaudRateCookie( baud ) < 0 )
         return parseMsgHelper( def, optParseError, "the specified baud rate (\"%s\") is not a valid one (4800, 9600, 19200, etc.", arg );
 
     // we have a valid baud rate, so stuff it away (for either -b or -B) and return in victory...
@@ -684,7 +683,7 @@ static void configureNmea( int fdPort, bool verbose, bool nmeaOn ) {
 int main( int argc, char *argv[] ) {
 
     clientData_slOptions clientData;
-    psloConfig config = { new_options, &clientData, false };
+    psloConfig config = { new_options, &clientData, false, false };
     psloResponse resp = process_slOptions(argc, (const char **) argv, &config );
 
     exit( EXIT_SUCCESS );

@@ -35,6 +35,8 @@ void sleep_ns( int ns );
 
 long long currentTimeMs();
 
+bool strempty( const char* str );
+
 long long max_ll( long long a, long long b );
 
 int hex2int( char c );

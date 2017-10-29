@@ -13,11 +13,9 @@
 #include "sl_options.h"
 
 // TODO: add functions to aid constraint checking (e.g. isID())
-// TODO: add debug trace (flag or --?)
-// TODO: handle case of multiple uses (e.g., -vvv)
-// TODO: handle case of last option missing required argument
-// TODO: add automated help, usage, version stuff
-// TODO: add validation of configuration (no duplicated short or long option names)
+// TODO: add automated help, usage, version stuff (default, overridable entries in definitions table)
+// TODO: iterate for parsing, constraints, and actions in the order of definitions, then user options order
+// TODO: break slOptions into its own project (static library?)
 
 #define MAX_SL_OPTIONS 100   // the maximum number of options that slOptions can parse...
 
@@ -39,6 +37,7 @@ extern char* getName_slOptions( optionDef_slOptions* def ) {
     if( shortDefined ) size += 2;
     if( longDefined ) size += 2 + strlen( def->longOpt );
     if( shortDefined && longDefined ) size++;
+    size++;  // don't forget the terminating zero...
 
     // now allocate the memory and build the result...
     char* result = safeMalloc( size );
@@ -62,7 +61,7 @@ extern char* getName_slOptions( optionDef_slOptions* def ) {
 // an option is found, a pointer to it is returned - otherwise, NULL is returned.
 static optionDef_slOptions* findByCharOption( char opt, const psloConfig* config ) {
     optionDef_slOptions* curDef = config->optionDefs;
-    while( curDef->shortOpt != 0 ) {
+    while( curDef->maxCount != 0 ) {
         if( curDef->shortOpt == opt )
             return curDef;
         curDef++;
@@ -77,7 +76,7 @@ static optionDef_slOptions* findByCharOption( char opt, const psloConfig* config
 // means that opt arguments that include an optional or required option argument will still be matched.
 static optionDef_slOptions* findByStringOption( char* opt, const psloConfig* config ) {
     optionDef_slOptions* curDef = config->optionDefs;
-    while( curDef->shortOpt != 0 ) {
+    while( curDef->maxCount != 0 ) {
         if( 0 == strncmp( opt, curDef->longOpt, strlen( curDef->longOpt ) ) )
             return curDef;
         curDef++;
@@ -152,6 +151,74 @@ static void printArgs( int argc, char** args ) {
     for( int i = 0; i < argc; i++ ) {
         printf( "%s ", *(args + i) );
     }
+}
+
+
+// Validate the given configuration, returning an error if any problems are found.
+static psloResponse validateConfig( const psloConfig* config ) {
+
+    // make sure we've got an options definition array...
+    if( config->optionDefs == NULL ) return errorMessageHelper( config->debug, "no option definitions configured" );
+
+    // iterate over all the supplied definitions, making sure that all required arguments are present...
+    int n = 0;
+    for( optionDef_slOptions* curDef = config->optionDefs; curDef->maxCount != 0; curDef++, n++ ) {
+        if( (curDef->longOpt == NULL) && (curDef->shortOpt == 0) )
+            return errorMessageHelper( config->debug, "option definition %d has neither a short form or a long form specified", n );
+        if( strempty( curDef->helpMsg ) )
+            return errorMessageHelper( config->debug, "option definition %s has no help message specified", getName_slOptions( curDef ) );
+
+        // iterate over the supplied definitions again to make sure we don't have a duplicate short or long name...
+        for( optionDef_slOptions* chkDef = config->optionDefs; chkDef->maxCount != 0; chkDef++ ) {
+            if( chkDef != curDef ) {
+                if( (curDef->shortOpt != 0) && (curDef->shortOpt == chkDef->shortOpt) )
+                    return errorMessageHelper( config->debug, "two option definitions have the same short name: %c", curDef->shortOpt );
+                if( (curDef->longOpt != NULL) && (chkDef->longOpt != NULL ) && (strcmp( curDef->longOpt, chkDef->longOpt ) == 0) )
+                    return errorMessageHelper( config->debug, "two option definitions have the same long name: %s", curDef->longOpt );
+            }
+        }
+    }
+
+    psloResponse okResponse = {0};
+    return okResponse;
+}
+
+
+typedef struct {
+    optionDef_slOptions* curDef;
+    int curRec;
+} optRecIteratorState;
+
+
+// Initializes the iterator state.
+static void optRecIteratorInit( optRecIteratorState* state, const psloConfig* config ) {
+    state->curDef = config->optionDefs;
+    state->curRec = 0;
+}
+
+
+// Returns the next procOptionRecord in the iteration, or NULL if there are no more.  The order of this iterator is
+// slightly tricky: it first iterates over the client-supplied option definitions, in order.  Within each of those
+// definitions, it then iterates over the option records in the processor state, which are in the order specified
+// by the program's user on the command line.  Each of those records whose definition matches the current client
+// option definition is then returned.  This means that procOptionRecords are returned in the same order that the
+// definitions were supplied in, and there will be multiple records with the same option definition returned IF the
+// user specified more than one AND multiple instances of that particular option are allowed.
+static const procOptionRecord* optRecIterator( optRecIteratorState* itState, const state_slOptions* state ) {
+
+    // iterate over all the option definitions looking for those with parsing functions, then for each of those
+    // iterate over the parsed option records those with the same definition, then calling the parsing function for each
+    for( ; itState->curDef->maxCount != 0; itState->curDef++ ) {
+        for ( ; itState->curRec < state->numOptionRecords; itState->curRec++) {
+            const procOptionRecord* rec = &state->optionRecords[itState->curRec];
+            if( itState->curDef == rec->def ) {
+                itState->curRec++;
+                return rec;
+            }
+        }
+        itState->curRec = 0;
+    }
+    return NULL;
 }
 
 
@@ -276,7 +343,6 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
             if( config->strict ) {
                 if( DEBUG ) printf( "Unidentified argument in strict mode; halting option processing\n" );
                 REM_ARGS = 0;
-                CUR_ARG_INDEX++;
             }
 
             // otherwise, it's time to permute...
@@ -299,6 +365,10 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
         }
     }
 
+    // make sure the last option has an argument, if it requires one...
+    if( (LAST_OPT_REC.def->arg == argRequired) && (LAST_OPT_REC.arg == NULL) )
+        return errorMessageHelper( DEBUG, "option [%s] missing required argument", getName_slOptions( LAST_OPT_REC.def ) );
+
     // return with an error-free response...
     psloResponse response = { argc - CUR_ARG_INDEX, false, NULL, &CUR_ARG };
     return response;
@@ -315,6 +385,11 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
 #define DEBUG (state.debug)
 extern psloResponse process_slOptions( int argc, const char *argv[], const psloConfig* config ) {
 
+    // validate the client's supplied configuration, to the extent we can...
+    if( config->debug ) printf( "Validating client-supplied configuration\n" );
+    psloResponse response = validateConfig( config );
+    if( response.error ) return response;
+
     // make a local (and mutable) copy of the original argv...
     char* argv_copy[argc];
     for( int i = 0; i < argc; i++ ) argv_copy[i] = (char *) argv[i];
@@ -328,22 +403,23 @@ extern psloResponse process_slOptions( int argc, const char *argv[], const psloC
     state.debug = config->debug;        // if the caller asked for debug, he's got it...
 
     // parse our options, and bail if we got an error...
-    psloResponse response = parsePhase( argc, config, &state );
+    if( DEBUG ) printf( "Starting command line option parsing phase\n" );
+    response = parsePhase( argc, config, &state );
     if( response.error ) return response;
 
     // when we get here, response.argc is the count of unprocessed arguments pointed to by response.argv...
 
-    // iterate through all the option records, calling the option parsing functions as we go...
-    for( int i = 0; i < state.numOptionRecords; i++ ) {
-        procOptionRecord* rec = &state.optionRecords[i];
-        optionDef_slOptions* def = rec->def;
-        if( def->parse != NULL ) {
-            parseResult_slOptions result = def->parse( def, rec->arg, config->clientData );
-            if( result.rc == optParseError ) {
-                return errorMessageHelper( DEBUG, result.msg );
-            }
-            else if( result.rc == optParseWarning ) {
-            }
+    if( DEBUG ) printf( "Starting individual option parsing phase\n" );
+    optRecIteratorState itState;
+    optRecIteratorInit( &itState, config );
+    const procOptionRecord* rec;
+    while( (rec = optRecIterator( &itState, &state )) != NULL ) {
+
+        parseResult_slOptions result = rec->def->parse( rec->def, rec->arg, config->clientData );
+        if (result.rc == optParseError) {
+            return errorMessageHelper( DEBUG, result.msg );
+        } else if (result.rc == optParseWarning) {
+            // TODO: how to handle this?
         }
     }
 
