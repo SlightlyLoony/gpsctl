@@ -34,6 +34,28 @@ extern void *safeMalloc( size_t size ) {
 }
 
 
+// Returns true if every character in the given string is printable (see isprint() for details).  Returns false if
+// the given string is empty.
+extern bool issprint( const char* str ) {
+    if( strempty( str ) ) return false;
+    do {
+        if( !isprint( *str ) ) return false;
+    } while( *(++str) != 0 );
+    return true;
+}
+
+
+// Returns true if every character in the given string is graphical (see isgraph() for details).  Returns false if
+// the given string is empty.
+extern bool issgraph( const char* str ) {
+    if( strempty( str ) ) return false;
+    do {
+        if( !isgraph( *str ) ) return false;
+    } while( *(++str) != 0 );
+    return true;
+}
+
+
 // Return the concatenation of the two given string in a newly allocated memory on the heap.  If the two
 // given strings are null, a null is returned.  If one of the given strings is null, then a COPY (in newly allocated
 // memory) of the non-null given string is returned.  Note that this behavior means that ANY non-null return value

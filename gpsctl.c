@@ -148,17 +148,19 @@ static void showUsage( void )   { printf( gpsctl_usage );   }
 
 
 
-static parseResult_slOptions parsePort(optionDef_slOptions *, char *, clientData_slOptions *);
-static parseResult_slOptions parseBaud(optionDef_slOptions *, char *, clientData_slOptions *);
+static parseResult_slOptions parsePort( const optionDef_slOptions*, char*, clientData_slOptions* );
+static parseResult_slOptions parseBaud( const optionDef_slOptions*, char*, clientData_slOptions* );
+static parseResult_slOptions parseInt(  const optionDef_slOptions*, char*, clientData_slOptions* );
 
 
 static optionDef_slOptions new_options[] = {
-  // max long       short   argtype      parsefunc   cnstrfunc    help
-    { 1, "port",     'p',   argRequired, parsePort,  NULL,        "specify current baud rate (default is 9600); any standard rate is allowed" },
-    { 3, "verbose",  'v',   argNone,     NULL,       NULL,        "get verbose messages, use up to three times for more verbosity" },
-    { 1, "autobaud", 'a',   argNone,     NULL,       NULL,        "enable baud rate discovery (if -b is also specified, starting with that rate)" },
-    { 1, "baud",     'b',   argRequired, parseBaud,  NULL,        "specify current baud rate (default is 9600); any standard rate is allowed"},
-    { 1, "newbaud",  'B',   argRequired, parseBaud,  NULL,        "change the U-Blox and host baud rates to the specified standard rate"},
+  // max long       short   argtype      parsefunc   cnstrfunc    actionfunc  argname       help
+    { 1, "port",     'p',   argRequired, parsePort,  NULL,        NULL,       "device",     "specify the port device (default is '/dev/serial0')" },
+    { 3, "verbose",  'v',   argNone,     NULL,       NULL,        NULL,       NULL,         "get verbose messages" },
+    { 1, "autobaud", 'a',   argNone,     NULL,       NULL,        NULL,       NULL,         "enable baud rate discovery (if -b is also specified, starting with that rate)" },
+    { 1, "baud",     'b',   argRequired, parseBaud,  NULL,        NULL,       "baud rate",  "specify current baud rate (default is '9600'); any standard rate is allowed"},
+    { 1, "newbaud",  'B',   argRequired, parseBaud,  NULL,        NULL,       "baud rate",  "change the U-Blox and host baud rates to the specified standard rate"},
+    { 1, "echo",     'e',   argOptional, parseInt,   NULL,        NULL,       "seconds",    "echo human-readable GPS data to stdout for the given time (0 or unspecified means forever)"},
     { 0 }
 };
 
@@ -167,7 +169,7 @@ static optionDef_slOptions new_options[] = {
 // error response with the given pattern and arguments resolved into a string.  Note that the returned value was
 // allocated, and should be freed when no longer needed.  The meta pattern must specify (in order) a %s to contain the
 // option identity, and another %s to contain the resolved error message.
-static char* msgHelper( char* meta, optionDef_slOptions* def, char *pattern, va_list args) {
+static char* msgHelper( char* meta, const optionDef_slOptions* def, char *pattern, va_list args) {
 
     // first we resolve the pattern we were given...
     char* resolved;
@@ -182,7 +184,7 @@ static char* msgHelper( char* meta, optionDef_slOptions* def, char *pattern, va_
 }
 
 
-static parseResult_slOptions parseMsgHelper( optionDef_slOptions* def, optParseRC_slOptions rc, char *pattern, ... ) {
+static parseResult_slOptions parseMsgHelper( const optionDef_slOptions* def, optParseRC_slOptions rc, char *pattern, ... ) {
 
     // get our error message...
     va_list args;
@@ -198,7 +200,7 @@ static parseResult_slOptions parseMsgHelper( optionDef_slOptions* def, optParseR
 }
 
 // Test the argument to see if it represents a valid serial port.  On failure, return an error.
-static parseResult_slOptions parsePort(optionDef_slOptions *def, char *arg, clientData_slOptions *clientData) {
+static parseResult_slOptions parsePort( const optionDef_slOptions *def, char *arg, clientData_slOptions *clientData ) {
 
     int vsd = verifySerialDevice( arg );
     switch( vsd ) {
@@ -219,7 +221,7 @@ static parseResult_slOptions parsePort(optionDef_slOptions *def, char *arg, clie
 
 // Parse the given argument, which is presumed to be a string representing a positive integer that is one of the
 // standard baud rates.  If the parsing fails for any reason, return an error
-static parseResult_slOptions parseBaud( optionDef_slOptions* def, char* arg, clientData_slOptions* clientData ) {
+static parseResult_slOptions parseBaud( const optionDef_slOptions* def, char* arg, clientData_slOptions* clientData ) {
 
     // make sure we can parse the entire argument into an integer...
     char *endPtr;
@@ -235,6 +237,31 @@ static parseResult_slOptions parseBaud( optionDef_slOptions* def, char* arg, cli
         clientData->baud = baud;
     else if( def->shortOpt == 'B' )
         clientData->newbaud = baud;
+    parseResult_slOptions response = { optParseOk, NULL };
+    return response;
+}
+
+
+// Parse the given argument, which is presumed to be a string representing an integer, the purpose of which depends on
+// the option being parsed. If the parsing fails for any reason, return an error
+static parseResult_slOptions parseInt( const optionDef_slOptions* def, char* arg, clientData_slOptions* clientData ) {
+
+    // make sure we can parse the entire argument into an integer...
+    char *endPtr;
+    int n = (int) strtol( arg, &endPtr, 10 );
+    if( *endPtr != 0 ) return parseMsgHelper( def, optParseError, "the specified %s (\"%s\") is not an integer", def->argName, arg );
+
+    // do the right thing, depending on which option we've got...
+    switch( def->shortOpt ) {
+        case 'e':
+            clientData->echoMax = n;
+            break;
+
+        // it shouldn't be possible to get here, but just in case...
+        default:
+            return parseMsgHelper( def, optParseError, "argument (\"%s\") parsed, but there's nothing to do with it", arg );
+            break;
+    }
     parseResult_slOptions response = { optParseOk, NULL };
     return response;
 }
@@ -683,7 +710,13 @@ static void configureNmea( int fdPort, bool verbose, bool nmeaOn ) {
 int main( int argc, char *argv[] ) {
 
     clientData_slOptions clientData;
-    psloConfig config = { new_options, &clientData, false, false };
+    psloConfig config = {
+            new_options,                                        // our command-line option definitions...
+            &clientData,                                        // our options processing data structure...
+            "gpsctl",                                           // name of gpsctl...
+            "0.5",                                              // version of gpsctl...
+            SL_OPTIONS_CONFIG_NORMAL                            // slOptions configuration options...
+    };
     psloResponse resp = process_slOptions(argc, (const char **) argv, &config );
 
     exit( EXIT_SUCCESS );

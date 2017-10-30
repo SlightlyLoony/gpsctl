@@ -29,6 +29,10 @@ void stackDump( void );
 
 void *safeMalloc( size_t size );
 
+bool issprint( const char* str );
+
+bool issgraph( const char* str );
+
 char* concat( const char *s1, const char *s2 );
 
 void sleep_ns( int ns );

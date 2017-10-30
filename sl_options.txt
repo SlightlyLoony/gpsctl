@@ -32,3 +32,6 @@ Special options (all in a single command line argument):
     -       stop all option processing at this point; rest of options handled outside slOptions
     --      stop all option processing at this point; rest of options handled outside slOptions
     --?     turn on slOption's debug tracing (must be the first option argument)
+
+Program configuration:
+-- a short option name of ' ' is a special case to handle the standalone '-' option

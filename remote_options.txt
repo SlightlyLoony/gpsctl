@@ -1,1 +1,1 @@
---? -p /dev/serial0 -b 96000 -B 19200
+--version --help -p /dev/serial0 -e
