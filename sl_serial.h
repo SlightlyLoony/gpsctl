@@ -32,15 +32,14 @@ int readSerialChar( int fdPort, long long msTimeout );
 
 int getBaudRate( int cookie );
 int getBaudRateCookie( int baudRate );
+bool ASCIIBaudRateSynchronizer( const char c, void **state);
+bool synchronize( int fdPort, baudRateSynchronizer, int );
 
-#define STO_INVALID_BAUD_RATE 1
-#define STO_OK 0
-#define STO_INVALID_FILE_DESCRIPTOR 2
-#define STO_INVALID_NUMBER_OF_DATA_BITS 3
-#define STO_INVALID_NUMBER_OF_STOP_BITS 4
-int setTermOptions( int fdPort, int baud, int dataBits, int stopBits, bool parityEnable, bool odd );
+typedef enum { stoOK, stoInvalidBaudRate, stoInvalidFileDescriptor, stoInvalidNumberOfDataBits, stoInvalidNumberOfStopBits } stoResult;
+stoResult setTermOptions( int fdPort, int baud, int dataBits, int stopBits, bool parityEnable, bool odd );
 
-int setTermOptionsBaud( int fdPort, int baud );
+stoResult setTermOptionsBaud( int fdPort, int baud );
+char* stoResultStr( stoResult result );
 
 #define SBR_SET_SYNC        0
 #define SBR_SET_NOSYNC      1

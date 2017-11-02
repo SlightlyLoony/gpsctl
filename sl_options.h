@@ -9,29 +9,15 @@
 #include "sl_buffer.h"
 
 typedef enum { argRequired, argOptional,    argNone          } argMode_slOptions;
-typedef enum { optParseOk,  optParseError,  optParseWarning  } optParseRC_slOptions;
-typedef enum { optCnstrOk,  optCnstrError,  optCnstrWarning  } optCnstrRC_slOptions;
-typedef enum { optActionOk, optActionError, optActionWarning } optActionRC_slOptions;
+typedef enum { resultOk,  resultError,  resultWarning  } resultType_slOptions;
 
 typedef struct clientData_slOptions clientData_slOptions;  // a client-defined structure that typically contains the results of options parsing
 typedef struct state_slOptions state_slOptions;  // an slOptions-defined data structure containing the state of slOptions while it's processing
 
 typedef struct {
-    optParseRC_slOptions rc;        // the result of processing the option
+    resultType_slOptions type;      // the result of processing the option
     char* msg;                      // an error message if the result was not Ok
-} parseResult_slOptions;            // the return value from any option parsing function
-
-
-typedef struct {
-    optCnstrRC_slOptions rc;        // the result of constraint checking on the option
-    char* msg;                      // an error message if the result was not Ok
-} cnstrResult_slOptions;
-
-
-typedef struct {
-    optActionRC_slOptions rc;        // the result of constraint checking on the option
-    char* msg;                      // an error message if the result was not Ok
-} actionResult_slOptions;
+} result_slOptions;                 // the return value from any parse, constraint, or action function
 
 // the response to a process_slOptions() call
 typedef struct {
@@ -45,9 +31,9 @@ typedef struct optionDef_slOptions optionDef_slOptions;
 
 typedef struct psloConfig psloConfig;
 
-typedef parseResult_slOptions  parse_slOptions(  const optionDef_slOptions* def, char* arg, clientData_slOptions* );  // option parsing function def
-typedef cnstrResult_slOptions  cnstr_slOptions(  char, clientData_slOptions* );  // constraint checking function def
-typedef actionResult_slOptions action_slOptions( const state_slOptions* state, const psloConfig* config, char* arg );  // action function def
+typedef result_slOptions  parse_slOptions(  void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* );  // option parsing function def
+typedef result_slOptions  cnstr_slOptions(  const optionDef_slOptions*, const psloConfig*, const state_slOptions* );  // constraint checking function def
+typedef result_slOptions action_slOptions( const optionDef_slOptions*, const psloConfig* );  // action function def
 
 struct optionDef_slOptions {
     unsigned int            maxCount;   // how many times this option may appear in a command line
@@ -55,6 +41,8 @@ struct optionDef_slOptions {
     char                    shortOpt;   // optional; the short form of the option
     argMode_slOptions       arg;        // controls whether the option has an argument, required or optional
     parse_slOptions*        parse;      // option parsing function, or NULL if not needed
+    void*                   parsePtr;   // optional pointer passed as an argument to the parse function
+    int                     parseInt;   // optional integer passed as an argument to the parse function
     cnstr_slOptions*        cnstr;      // constraint checking function, or NULL if not needed
     action_slOptions*       action;     // action function, or NULL if not needed
     char*                   argName;    // short name of argument (REQUIRED if there could be an argument )
@@ -74,12 +62,18 @@ struct optionDef_slOptions {
 struct psloConfig {
     optionDef_slOptions* optionDefs;    // pointer to client-defined option definitions
     clientData_slOptions* clientData;   // pointer to client-defined data structure
+    cnstr_slOptions* beforeConstraint;  // optional constraint-checking function to call BEFORE calling any per-option constraint functions
+    cnstr_slOptions* afterConstraint;   // optional constraint-checking function to call AFTER calling all per-option constraint functions
+    action_slOptions* beforeAction;     // optional action function to call BEFORE calling any per-option action functions
+    action_slOptions* afterAction;      // optional action function to call AFTER calling all other per-option action functions
     char* name;                         // a client-defined program name
     char* version;                      // a client-defined string representing the version of the program
+    char* addedInfo;                    // a client-defined string giving additional information about using the program
     int options;                        // options for the behavior of slOptions
 };
 
-
+bool hasShortOption_slOptions( char, const state_slOptions* );
+bool hasLongOption_slOptions( const char*, const state_slOptions* );
 psloResponse process_slOptions( int argc, const char *argv[], const psloConfig* config );
 char* getName_slOptions( const optionDef_slOptions* );
 

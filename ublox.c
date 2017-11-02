@@ -407,6 +407,17 @@ extern reportResponse getVersion(int fdPort, bool verbose, ubxVersion *version )
 }
 
 
+extern bool ubxSynchronize( const int fdPort, const int verbosity ) {
+
+    // send the request message and wait for the response...
+    ubxType type = { UBX_MON, UBX_MON_VER };
+    slBuffer* body = create_slBuffer( 0, LittleEndian );
+    ubxMsg msg = createUbxMsg( type, body );
+    ubxPollResponse result = pollUbx( fdPort, msg );
+    return ( result.state == Ok );
+}
+
+
 // Returns the current state of NMEA data on the GPS's UART.  Returns 0 if NMEA is off, 1 if NMEA is on, and -1
 // if there was an error.
 static int isNmeaOn( int fdPort ) {

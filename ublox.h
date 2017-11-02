@@ -79,4 +79,6 @@ reportResponse getFix( int fdPort, bool verbose, pvt_fix *fix );
 
 configResponse setNmeaData( int fdPort, bool verbose, bool nmeaOn );
 
+bool ubxSynchronize( const int, const int );
+
 #endif //GPSCTL_UBLOX_H

@@ -1,1 +1,1 @@
---version --help -p /dev/serial0 -e
+-s ascii

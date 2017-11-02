@@ -24,6 +24,18 @@
 #include "sl_bits.h"
 
 
+// Returns a string representation of the given stoResult value.  The string need not be freed.
+extern char* stoResultStr( const stoResult value ) {
+    switch( value ) {
+        case stoOK:                      return "OK";
+        case stoInvalidBaudRate:         return "invalid baud rate";
+        case stoInvalidFileDescriptor:   return "invalid file descriptor";
+        case stoInvalidNumberOfStopBits: return "invalid number of stop bits";
+        case stoInvalidNumberOfDataBits: return "invalid number of data bits";
+        default:                         return "unknown stoResult code";
+    }
+}
+
 // Returns speed information for the given port.
 extern speedInfo getSpeedInfo( int fdPort ) {
     speedInfo result;
@@ -32,13 +44,6 @@ extern speedInfo getSpeedInfo( int fdPort ) {
     result.baudRate = getBaudRate( (int) cfgetispeed( &options ) );
     result.nsBit = 1000000000 / result.baudRate;
     int stopBits = (options.c_cflag & CSTOPB) ? 2 : 1;
-//    tcflag_t mask = CSIZE;
-//    tcflag_t ccfl = options.c_cflag;
-//    while( !(mask & 1) ) {
-//        mask >>= 1;
-//        ccfl >>= 1;
-//    }
-//    int dataBits = (int) ((ccfl & 0x3) + 5);
     int dataBits = (int) getBitField_slBits( options.c_cflag, CSIZE );
     int bits = stopBits + dataBits;
     result.nsChar = bits * result.nsBit;
@@ -78,7 +83,7 @@ extern int verifySerialDevice( const char *deviceName ) {
 }
 
 
-// Reads a single character from the given serial port, waiting at most the given number of millieseconds.  Returns
+// Reads a single character from the given serial port, waiting at most the given number of milliseconds.  Returns
 // the character read or one of the following values:
 // RSC_TIMED_OUT
 // RSC_READ_ERROR
@@ -102,7 +107,7 @@ extern int readSerialChar( int fdPort, long long msTimeout ) {
 
         // if we got an error, tell our caller...
         if( (rx_length < 0) && (errno != EAGAIN) ) {
-            readErrno( errno );
+            perror( "Read character error" );
             return RSC_READ_ERROR;
         }
 
@@ -151,20 +156,22 @@ extern int getBaudRate( int cookie ) {
 }
 
 
-// Change the baud rate ONLY.  Returns the same error codes as setTermOptions.
-extern int setTermOptionsBaud( int fdPort, int baud ) {
+// Change the baud rate ONLY.  First waits for transmitter to finish sending any buffered data, then flushes any
+// received data after changing the rate.  Returns the same error codes as setTermOptions.
+extern stoResult setTermOptionsBaud( int fdPort, int baud ) {
 
-    if( fdPort < 0 ) return STO_INVALID_FILE_DESCRIPTOR;
+    if( fdPort < 0 ) return stoInvalidFileDescriptor;
     int baudCookie = getBaudRateCookie( baud );
-    if( baudCookie < 0 ) return STO_INVALID_BAUD_RATE;
+    if( baudCookie < 0 ) return stoInvalidBaudRate;
 
     struct termios options;
+    tcdrain( fdPort );
     tcgetattr( fdPort, &options );
     cfsetispeed( &options, (speed_t) baudCookie );
     cfsetospeed( &options, (speed_t) baudCookie );
     tcflush( fdPort, TCIFLUSH );
     tcsetattr( fdPort, TCSANOW, &options );
-    return STO_OK;
+    return stoOK;
 }
 
 
@@ -172,22 +179,22 @@ extern int setTermOptionsBaud( int fdPort, int baud ) {
 // bits, parity enable, and parity polarity (true for odd, false for even).  The given arguments are first checked for
 // validity.  If there is a problem, then the appropriate error code is returned.  If there were no errors, then
 // zero is returned.
-extern int setTermOptions( int fdPort, int baud, int dataBits, int stopBits, bool parityEnable, bool parityOdd ) {
+extern stoResult setTermOptions( int fdPort, int baud, int dataBits, int stopBits, bool parityEnable, bool parityOdd ) {
 
-    if( fdPort < 0 ) return STO_INVALID_FILE_DESCRIPTOR;
+    if( fdPort < 0 ) return stoInvalidFileDescriptor;
     int baudCookie = getBaudRateCookie( baud );
-    if( baudCookie < 0 ) return STO_INVALID_BAUD_RATE;
+    if( baudCookie < 0 ) return stoInvalidBaudRate;
     int dataBitCookie = 0;
     switch( dataBits ) {
         case 5: dataBitCookie = CS5; break;
         case 6: dataBitCookie = CS6; break;
         case 7: dataBitCookie = CS7; break;
         case 8: dataBitCookie = CS8; break;
-        default: return STO_INVALID_NUMBER_OF_DATA_BITS;
+        default: return stoInvalidNumberOfDataBits;
     }
     int stopBitCookie;
     if( stopBits == 1 ) stopBitCookie = 0;
-    else if( stopBits == 2 ) stopBitCookie = CSTOPB; else return STO_INVALID_NUMBER_OF_STOP_BITS;
+    else if( stopBits == 2 ) stopBitCookie = CSTOPB; else return stoInvalidNumberOfStopBits;
     int parityCookie = (parityEnable ? PARENB | (parityOdd ? PARODD : 0) : 0);
 
     struct termios options;
@@ -198,7 +205,7 @@ extern int setTermOptions( int fdPort, int baud, int dataBits, int stopBits, boo
     options.c_lflag = 0;
     tcflush( fdPort, TCIFLUSH );
     tcsetattr( fdPort, TCSANOW, &options );
-    return STO_OK;
+    return stoOK;
 }
 
 
@@ -208,7 +215,7 @@ extern int setTermOptions( int fdPort, int baud, int dataBits, int stopBits, boo
 //   *state == NULL:            initializes its state and sets *state to point to it, returns false
 //   *state != NULL && c >= 0:  updates the state, if synchronized returns true, sets *state to NULL
 //   *state != NULL && c < 0:   releases resources, sets *state to NULL, returns false
-static bool defaultBaudRateSynchronizer( const char c, void **state ) {
+extern bool ASCIIBaudRateSynchronizer(const char c, void **state) {
 
     typedef struct dbrState {
         int count;
@@ -246,6 +253,41 @@ static bool defaultBaudRateSynchronizer( const char c, void **state ) {
 }
 
 
+// Attempts to synchronize at the host's current baud rate.  Returns true if the synchronization was successful,
+// false otherwise.
+extern bool synchronize( int fdPort, baudRateSynchronizer synchronizer, int verbosity ) {
+
+    void *state = NULL;
+    synchronizer( 0, &state );  // initialize the synchronizer
+
+    speedInfo si = getSpeedInfo( fdPort );
+    if( verbosity > 0 ) printf( "Synchronizing at %d baud...\n", si.baudRate );
+    long long start = currentTimeMs();
+    long long timeout = max_ll( 1000, 200 * si.nsChar / 1000000 ); // max of one second or 200 character times...
+    while( (currentTimeMs() - start) < timeout ) {
+        int c = readSerialChar( fdPort, start + timeout - currentTimeMs() );
+        if( c == RSC_READ_ERROR ) {
+            synchronizer( -1, &state );  // close synchronizer...
+            return false;
+        }
+        if( c == RSC_TIMED_OUT ) {
+            if( verbosity > 0 ) printf( "Timed out when attempting to read serial character...\n" );
+            break;
+        }
+
+        // are we synchronized yet?
+        if( synchronizer( (char) c, &state) ) {
+            if( verbosity > 0 ) printf( "Synchronized at %d baud...\n", si.baudRate );
+            return true;
+        }
+    }
+    // we get here if we timed out...
+    if( verbosity > 0 ) printf( "Timed out while attempting to synchronize at %d baud...\n", si.baudRate );
+    synchronizer( -1, &state );  // close synchronizer...
+    return false;
+}
+
+
 // Sets the baud rate on the given serial port.  If the given synchronizer is NULL, then the default synchronizer
 // will be used.  The actions taken depend on the give values for baudRate and autoRate:
 //   0, true       automatic baud rate discovery, starting at the highest baud rate and working down
@@ -261,7 +303,7 @@ extern int setBaudRate( int fdPort, int baudRate, bool synchronize, bool autoRat
                         baudRateSynchronizer synchronizer, bool verbose ) {
 
     // if we didn't get a synchronizer, use the default...
-    if( !synchronizer ) synchronizer = defaultBaudRateSynchronizer;
+    if( !synchronizer ) synchronizer = ASCIIBaudRateSynchronizer;
 
     // validate our baud rate, if it's specified...
     if( baudRate ) {
@@ -299,7 +341,7 @@ extern int setBaudRate( int fdPort, int baudRate, bool synchronize, bool autoRat
 
         // set the new baud rate...
         if( verbose ) printf( "Setting baud rate to %d...\n", nextBaud );
-        if( setTermOptionsBaud( fdPort, nextBaud ) != STO_OK ) {
+        if( setTermOptionsBaud( fdPort, nextBaud ) != stoOK ) {
             synchronizer( -1, &state );  // close synchronizer...
             return SBR_INVALID;
         }

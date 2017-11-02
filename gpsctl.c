@@ -13,7 +13,7 @@
  *  Github:
  * License: MIT
  *
- * Copyright <YEAR> <COPYRIGHT HOLDER>
+ * Copyright 2017 Tom Dilatush
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
  * documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -31,7 +31,7 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-// TODO: make my own get_options_long() equivalent, easier to configure?
+// TODO: rethink command-line options, ESPECIALLY for baud rate setting
 // TODO: add save configuration
 // TODO: add set stationary or portable mode
 // TODO: add UBX-only synchronizer (so it will synchronize even without NMEA data)
@@ -39,6 +39,8 @@
 // TODO: set antenna and cable length specs
 // TODO: make sure we free any allocated slBuffers!
 // TODO: add needed printfs for verbose mode...
+// TODO: add filter for NMEA message types on echo, also message verifier (only echo good messages)
+// TODO: add constraint for autobaud and baud not simultaneously set
 
 
 // these defines allow compiling on both an OS X development machine and the target Raspberry Pi.  If different
@@ -62,362 +64,51 @@
 #include "ublox.h"
 #include "cJSON.h"
 
+typedef enum { fixQuery, versionQuery } queryType;
+typedef enum { syncNone, syncASCII, syncNMEA, syncUBX } syncType;
+typedef struct { char* name; syncType type; } syncTypeRec;
 
-typedef struct parsed_args {
-    bool verbose;
-    bool autobaud;
-    char *port;
-    int baud;
-    int newbaud;
-    bool usage;
-    bool help;
-    bool version;
-    bool report;
-    bool echo;
-    bool nmea;
-    bool nmeaState;
-    bool json;
-    int echoMax;
-    int queryType;
-    bool error;
-    bool synchronize;
-    char *errorMsg;
-    bool errorMsgAllocated;
-} parsed_args;
+static syncTypeRec syncTypeRecs[] = {
+        { "ascii", syncASCII },
+        { "nmea",  syncNMEA  },
+        { "ubx",   syncUBX   }
+};
 
 struct clientData_slOptions {
-    bool verbose;
-    bool autobaud;
-    char *port;
+    int verbosity;
+    syncType syncMethod;
+    const char *port;
     int baud;
+    int minBaud;
     int newbaud;
-    bool usage;
-    bool help;
-    bool version;
     bool report;
     bool echo;
     bool nmea;
-    bool nmeaState;
     bool json;
-    int echoMax;
-    int queryType;
+    int echoSeconds;
+    queryType queryType;
     bool error;
-    bool synchronize;
-    char *errorMsg;
-    bool errorMsgAllocated;
+    int fdPort;
 };
 
 
-static const char *gpsctl_version        = "gpsctl 0.1\n";
-static const char *gpsctl_pretty_version = "Version:\n  %s";
-static const char *gpsctl_doc            = "Purpose:\n  gpsctl - control, query and configure U-Blox GPS on Raspberry Pi 3 serial port\n";
-static const char *gpsctl_usage          = "Usage:\n  gpsctl [-?VUarstv] -p <port> -b <baud> -B <baud> -e [maxtime]\n";
-static const char *gpsctl_help = "Options:\n" \
-                    "  -?, --help      display this help message and exit\n"
-                    "  -V, --version   display gpsctl version number\n"
-                    "  -U, --usage     display short message on usage of gpsctl\n"
-                    "  -p, --port      specify the device for the serial port (default is '/dev/serial0')\n"
-                    "  -b, --baud      specify current baud rate (default is 9600); any standard rate is allowed\n"
-                    "  -a, --autobaud  enable baud rate discovery (if -b is specified, starting with that rate)\n"
-                    "  -B, --newbaud   change the U-Blox baud rate to the specified standard rate\n"
-                    "  -s, --sync      synchronize after setting baud rate\n"
-                    "  -v, --verbose   get verbose messages\n"
-                    "  -e, --echo      echo human-readable GPS (presumably NMEA) data to stdout for 'n' seconds (0 means forever)\n"
-                    "  -q, --query     query the GPS for info (see QUERY TYPES below)\n"
-                    "  -j, --json      produces query results in JSON format instead of English\n"
-                    "  -n  --nmea      configure whether the GPS sends NMEA data to the UART (see YES OR NO VALUES below)\n"
-                    "\n"
-                    "Query types:\n"
-                    "   fix       reports latitude, longitude, altitude, and time with accuracy figures\n"
-                    "   version   reports the version information from the GPS\n"
-                    "\n"
-                    "Yes or no values\n"
-                    "   Yes       indicated by an initial character of 'y', 'Y', 't', 'T', or '1'\n"
-                    "   No        indicated by anything else\n";
+// Set the sync method to that specified in the argument.  Return true if there's no argument (and do nothing) or the
+// argument was recognized; false if there was an unrecognizable argument.
+static bool setSyncMethod( const char* arg, clientData_slOptions* clientData ) {
 
+    // if no argument was supplied, don't do anything at all...
+    if( arg == NULL ) return true;
 
-static void showHelp( void )    {
-    printf( gpsctl_doc);
-    printf( gpsctl_pretty_version, gpsctl_version );
-    printf( gpsctl_usage );
-    printf( gpsctl_help );
-}
-
-static void showVersion( void ) { printf( gpsctl_version ); }
-static void showUsage( void )   { printf( gpsctl_usage );   }
-
-
-
-static parseResult_slOptions parsePort( const optionDef_slOptions*, char*, clientData_slOptions* );
-static parseResult_slOptions parseBaud( const optionDef_slOptions*, char*, clientData_slOptions* );
-static parseResult_slOptions parseInt(  const optionDef_slOptions*, char*, clientData_slOptions* );
-
-
-static optionDef_slOptions new_options[] = {
-  // max long       short   argtype      parsefunc   cnstrfunc    actionfunc  argname       help
-    { 1, "port",     'p',   argRequired, parsePort,  NULL,        NULL,       "device",     "specify the port device (default is '/dev/serial0')" },
-    { 3, "verbose",  'v',   argNone,     NULL,       NULL,        NULL,       NULL,         "get verbose messages" },
-    { 1, "autobaud", 'a',   argNone,     NULL,       NULL,        NULL,       NULL,         "enable baud rate discovery (if -b is also specified, starting with that rate)" },
-    { 1, "baud",     'b',   argRequired, parseBaud,  NULL,        NULL,       "baud rate",  "specify current baud rate (default is '9600'); any standard rate is allowed"},
-    { 1, "newbaud",  'B',   argRequired, parseBaud,  NULL,        NULL,       "baud rate",  "change the U-Blox and host baud rates to the specified standard rate"},
-    { 1, "echo",     'e',   argOptional, parseInt,   NULL,        NULL,       "seconds",    "echo human-readable GPS data to stdout for the given time (0 or unspecified means forever)"},
-    { 0 }
-};
-
-
-// Helper function to create error messages with given meta pattern, the subpattern, and arguments embedded.  Returns an
-// error response with the given pattern and arguments resolved into a string.  Note that the returned value was
-// allocated, and should be freed when no longer needed.  The meta pattern must specify (in order) a %s to contain the
-// option identity, and another %s to contain the resolved error message.
-static char* msgHelper( char* meta, const optionDef_slOptions* def, char *pattern, va_list args) {
-
-    // first we resolve the pattern we were given...
-    char* resolved;
-    vasprintf( &resolved, pattern, args );
-
-    // then we insert that into our pattern...
-    char* errMsg;
-    asprintf( &errMsg, meta , getName_slOptions( def ), resolved );
-    free( resolved );
-    
-    return errMsg;
-}
-
-
-static parseResult_slOptions parseMsgHelper( const optionDef_slOptions* def, optParseRC_slOptions rc, char *pattern, ... ) {
-
-    // get our error message...
-    va_list args;
-    va_start( args, pattern );
-    char* errMsg = msgHelper( "Option parsing problem: [%s] %s", def, pattern, args );
-    va_end( args );
-    
-    // return our bad news...
-    parseResult_slOptions result;
-    result.rc = rc;
-    result.msg = errMsg;
-    return result;
-}
-
-// Test the argument to see if it represents a valid serial port.  On failure, return an error.
-static parseResult_slOptions parsePort( const optionDef_slOptions *def, char *arg, clientData_slOptions *clientData ) {
-
-    int vsd = verifySerialDevice( arg );
-    switch( vsd ) {
-        case VSD_IS_SERIAL:
-            clientData->port = arg;
-            parseResult_slOptions result = { optParseOk, NULL };
-            return result;
-        case VSD_NULL:          return parseMsgHelper( def, optParseError, "no serial device was specified" );
-        case VSD_NOT_TERMINAL:  return parseMsgHelper( def, optParseError, "\"%s\" is not a terminal", arg );
-        case VSD_CANT_OPEN:     return parseMsgHelper( def, optParseError, "\"%s\" cannot be opened", arg );
-        case VSD_NONEXISTENT:   return parseMsgHelper( def, optParseError, "\"%s\" doesn't exist", arg );
-        case VSD_NOT_CHARACTER: return parseMsgHelper( def, optParseError, "\"%s\" is not a character device", arg );
-        case VSD_NOT_DEVICE:    return parseMsgHelper( def, optParseError, "\"%s\" is not a device", arg );
-        default:                return parseMsgHelper( def, optParseError, "\"%s\" failed for unknown reasons (code %d)", arg, vsd );
-    }
-}
-
-
-// Parse the given argument, which is presumed to be a string representing a positive integer that is one of the
-// standard baud rates.  If the parsing fails for any reason, return an error
-static parseResult_slOptions parseBaud( const optionDef_slOptions* def, char* arg, clientData_slOptions* clientData ) {
-
-    // make sure we can parse the entire argument into an integer...
-    char *endPtr;
-    int baud = (int) strtol( arg, &endPtr, 10 );
-    if( *endPtr != 0 ) return parseMsgHelper( def, optParseError, "the specified baud rate (\"%s\") is not an integer", arg );
-
-    // make sure the result is a valid baud rate...
-    if( getBaudRateCookie( baud ) < 0 )
-        return parseMsgHelper( def, optParseError, "the specified baud rate (\"%s\") is not a valid one (4800, 9600, 19200, etc.", arg );
-
-    // we have a valid baud rate, so stuff it away (for either -b or -B) and return in victory...
-    if( def->shortOpt == 'b' )
-        clientData->baud = baud;
-    else if( def->shortOpt == 'B' )
-        clientData->newbaud = baud;
-    parseResult_slOptions response = { optParseOk, NULL };
-    return response;
-}
-
-
-// Parse the given argument, which is presumed to be a string representing an integer, the purpose of which depends on
-// the option being parsed. If the parsing fails for any reason, return an error
-static parseResult_slOptions parseInt( const optionDef_slOptions* def, char* arg, clientData_slOptions* clientData ) {
-
-    // make sure we can parse the entire argument into an integer...
-    char *endPtr;
-    int n = (int) strtol( arg, &endPtr, 10 );
-    if( *endPtr != 0 ) return parseMsgHelper( def, optParseError, "the specified %s (\"%s\") is not an integer", def->argName, arg );
-
-    // do the right thing, depending on which option we've got...
-    switch( def->shortOpt ) {
-        case 'e':
-            clientData->echoMax = n;
-            break;
-
-        // it shouldn't be possible to get here, but just in case...
-        default:
-            return parseMsgHelper( def, optParseError, "argument (\"%s\") parsed, but there's nothing to do with it", arg );
-            break;
-    }
-    parseResult_slOptions response = { optParseOk, NULL };
-    return response;
-}
-
-
-// Used by getopt_long to parse long options.  Note that we're using it basically to map long options to short
-// options, though it also gives us the additional benefit of using "equals" format (like "--baud=9600"
-static struct option options[] = {
-    { "help",        no_argument,       0, '?' },
-    { "version",     no_argument,       0, 'V' },
-    { "usage",       no_argument,       0, 'U' },
-    { "port",        required_argument, 0, 'p' },
-    { "baud",        required_argument, 0, 'b' },
-    { "autobaud",    no_argument,       0, 'a' },
-    { "new_baud",    required_argument, 0, 'B' },
-    { "verbose",     no_argument,       0, 'v' },
-    { "synchronize", no_argument,       0, 's' },
-    { "echo",        required_argument, 0, 'e' },
-    { "query",       required_argument, 0, 'q' },
-    { "json",        no_argument,       0, 'j' },
-    { "nmea",        required_argument, 0, 'n' },
-    { 0,             0,                 0, 0   }
-};
-
-
-// Given a short option character, returns the long version of the option (or null if there wasn't any).
-static char* getLongOption( const char shortOption ) {
-    struct option* curOption = options;
-    while( curOption->name ) {
-        if( shortOption == curOption->val )
-            return (char *) curOption->name;
-        curOption++;
-    }
-    return NULL;
-}
-
-
-// Helper function to create error messages with the argument embedded.  Always returns -1.
-static int errMsgHelper( char *format, const char *arg, parsed_args *parsed_args ) {
-    size_t len = strlen( format ) + strlen( arg ) + 10;
-    parsed_args->errorMsg = safeMalloc( len );
-    snprintf( parsed_args->errorMsg, len - 1, format, arg );
-    parsed_args->errorMsgAllocated = true;
-    return -1;
-}
-
-
-
-
-// Parses the given argument, which is presumed to be a string that is the name of a serial device.  If the specified
-// device does not exist, or is not a serial device, produces an error.  If there were no errors, the device in
-// parsed_args is changed to the argument.  The return value is 0 if there was no error, or -1 if there was an error.
-static int getPort( const char *arg, parsed_args *parsed_args ) {
-
-    int vsd = verifySerialDevice( arg );
-    if( vsd == VSD_NULL          ) return errMsgHelper( "no serial device was specified",                          arg, parsed_args );
-    if( vsd == VSD_NOT_TERMINAL  ) return errMsgHelper( "the specified device (\"%s\") is not a terminal",         arg, parsed_args );
-    if( vsd == VSD_CANT_OPEN     ) return errMsgHelper( "the specified device (\"%s\") cannot be opened",          arg, parsed_args );
-    if( vsd == VSD_NONEXISTENT   ) return errMsgHelper( "the specified device (\"%s\") doesn't exist",             arg, parsed_args );
-    if( vsd == VSD_NOT_CHARACTER ) return errMsgHelper( "the specified device (\"%s\") is not a character device", arg, parsed_args );
-    if( vsd == VSD_NOT_DEVICE    ) return errMsgHelper( "the specified device (\"%s\") is not a device",           arg, parsed_args );
-
-    parsed_args->port = (char *) arg;
-    return VSD_IS_SERIAL;
-}
-
-
-static char *query_types[] = {
-        "fix",
-        "version"
-};
-
-// Parses the given argument and sets queryType in parsed_args to indicate the type.  Returns 0 on success, or -1
-// if the argument wasn't recognized.
-static int getQueryType( const char *arg, parsed_args *parsed_args ) {
-
-    for( int i = 0; i < sizeof( query_types); i++ ) {
-
-        if( strcmp( arg, query_types[i] ) == 0 ) {
-            parsed_args->queryType = i + 1;
-            return 0;
-        }
-    }
-    return errMsgHelper( "the given argument (\"%s\") is not a valid option for -q/--query", arg, parsed_args );
-}
-
-
-static int getEcho( const char *arg, parsed_args *parsed_args ) {
-
-    // get any max time parameter...
-    parsed_args->echoMax = 0;
-    if( arg ) {
-
-        // make sure we can parse the entire argument into an integer...
-        char *endPtr;
-        parsed_args->echoMax = (int) strtol(arg, &endPtr, 10);
-        if (*endPtr != 0) return errMsgHelper("specified max echo time (\"%s\") not an integer", arg, parsed_args);
-    }
-
-    parsed_args->echo = true;
-    return 0;
-}
-
-
-// Reads the argument (first character only) to see if it represents a true or a false, then sets that value.
-static void getBool( const char *arg, bool *boolArg ) {
-    char *answer = strchr( "yYtT1", *arg );
-    *boolArg = (answer != NULL);
-}
-
-
-// Process program options.  Returns true on success, false if there was any error.
-static bool getOptions( int argc, char *argv[], parsed_args *pa ) {
-
-    int option_index;
-    int opt;
-
-    // set our default values...
-    pa->port = "/dev/serial0";
-    pa->baud = 9600;
-
-    // process each option on the command line...
-    while( (opt = getopt_long(argc, argv, ":VUp:b:arB:vsn:jq:e:?", options, &option_index)) != -1 ) {
-
-        if (opt == -1) break;  // detect end of options...
-
-        switch( opt ) {
-            case 0:   /* get here if long option sets a flag */           break;  // naught to do here...
-//            case 'b': pa->baud = getBaud( optarg, pa );                   break;  // -b or --baud
-//            case 'B': pa->newbaud = getBaud( optarg, pa );                break;  // -B or --newbaud
-            case '?': pa->help = true;                                    break;  // -? or --help
-            case 'U': pa->usage = true;                                   break;  // -U or --usage
-            case 'V': pa->version = true;                                 break;  // -V or --version
-            case 'p': getPort( optarg, pa);                               break;  // -p or --port
-            case 'v': pa->verbose = true;                                 break;  // -v or --verbose
-            case 's': pa->synchronize = true;                             break;  // -s or --sync
-            case 'a': pa->autobaud = true;                                break;  // -a or --autobaud
-            case 'e': getEcho( optarg, pa );                              break;  // -e or --echo
-            case 'q': getQueryType( optarg, pa );                         break;  // -q or --query
-            case 'j': pa->json = true;                                    break;  // -j or --json
-            case 'n': pa->nmea = true; getBool( optarg, &pa->nmeaState ); break;  // -n or --nmea
-            case ':':                                                     break;  // required argument is missing
-            default:                                                      break;
-        }
-
-        // check for an error on the option we just processed...
-        if( pa->errorMsg ) {
-            pa->error = true;
-            printf("Error in program option -%c or --%s: %s\n", opt,
-                   getLongOption((const char) opt), pa->errorMsg );
-            if( pa->errorMsgAllocated ) free( pa->errorMsg );
-            pa->errorMsg = NULL;
+    // otherwise, try to match the argument...
+    for (int i = 0; i < ARRAY_SIZE(syncTypeRecs); i++) {
+        if (0 == strncmp(arg, syncTypeRecs[i].name, strlen(arg))) {
+            clientData->syncMethod = syncTypeRecs[i].type;
+            return true;
         }
     }
 
-    return !pa->error;
+    // if we get here, we couldn't find the method, so do nothing but return a problem...
+    return false;
 }
 
 
@@ -433,7 +124,7 @@ static bool NMEABaudRateSynchronizer( const char c, void **state ) {
         int cksm;      // the running checksum (actually longitudnal parity)...
         char last[3];  // the three most recently received characters...
     } nbrsState;
-    
+
     // convenience variable...
     nbrsState *nbrs = ((nbrsState*)(*state));
 
@@ -494,62 +185,345 @@ static bool NMEABaudRateSynchronizer( const char c, void **state ) {
 }
 
 
-// Open and setup the serial port, including the baud rate.
-static int openSerialPort( struct parsed_args *parsed_args ) {
-    int fdPort = open( parsed_args->port, O_RDWR | O_NOCTTY | O_NONBLOCK );
-    if( fdPort < 0 ) {
-        printf( "Failed to open serial port (\"%s\")!\n", parsed_args->port );
-        exit(1);
-    }
-    if( parsed_args->verbose ) printf( "Serial port (\"%s\") open...\n", parsed_args->port );
+// Attempt to synchronize, using the given method at the current host baud rate.  Returns true if the synchronization
+// was successful, false otherwise.
+static bool syncSerial( const syncType type, const int fdPort, const int verbosity ) {
 
-    int result = setTermOptions( fdPort, 9600, 8, 1, false, false );
-    if( result != STO_OK ) {
-        printf( "Error when setting terminal options (code: %d)!\n", result );
-        close( fdPort );
-        exit( 1 );
+    // if our type is ubx, then we have to send messages and see if we get a valid response...
+    if( type == syncUBX ) {
+        return ubxSynchronize( fdPort, verbosity );
     }
 
-    result = setBaudRate( fdPort, parsed_args->baud, parsed_args->synchronize, parsed_args->autobaud,
-                          NMEABaudRateSynchronizer, parsed_args->verbose );
-    int expected = (parsed_args->autobaud || parsed_args->synchronize) ? SBR_SET_SYNC : SBR_SET_NOSYNC;
-    if( result != expected ) {
-        switch( result ) {
-            case SBR_INVALID:
-                printf( "Baud rate is invalid or not specified!\n" );
-                break;
-            case SBR_FAILED_SYNC:
-                printf( "Failed to synchronize serial port receiver!\n" );
-                break;
-            case SBR_PORT_ERROR:
-                printf( "Error reading from serial port!\n" );
-                break;
-            default:
-                printf( "Unknown error when setting baud rate (code: %d)!\n", result );
-                break;
-        }
-        close( fdPort );
-        exit( 1 );
+    // otherwise, we're going to sync on a presumed data stream (generally NMEA), so we're just listening...
+    else {
+        baudRateSynchronizer* syncer = (type == syncNMEA) ? NMEABaudRateSynchronizer : ASCIIBaudRateSynchronizer;
+        return synchronize( fdPort, syncer, verbosity );
     }
-    if( parsed_args->verbose ) printf( "Serial port open and configured...\n" );
-    return fdPort;
 }
 
 
-static void echo( int fdPort, bool verbose, int maxSeconds ) {
 
-    if( verbose ) printf( "Starting echo...\n" );
+// Helper function to create error messages with given meta pattern, the subpattern, and arguments embedded.  Returns an
+// error response with the given pattern and arguments resolved into a string.  Note that the returned value was
+// allocated, and should be freed when no longer needed.  The meta pattern must specify (in order) a %s to contain the
+// option identity, and another %s to contain the resolved error message.
+static char* msgHelper( char* meta, const optionDef_slOptions* def, char *pattern, va_list args) {
+
+    // first we resolve the pattern we were given...
+    char* resolved;
+    vasprintf( &resolved, pattern, args );
+
+    // then we insert that into our pattern...
+    char* errMsg;
+    asprintf( &errMsg, meta , getName_slOptions( def ), resolved );
+    free( resolved );
+    
+    return errMsg;
+}
+
+
+static result_slOptions parseMsgHelper( const optionDef_slOptions* def, resultType_slOptions type, char *pattern, ... ) {
+
+    // get our error message...
+    va_list args;
+    va_start( args, pattern );
+    char* errMsg = msgHelper( "Option parsing problem: [%s] %s", def, pattern, args );
+    va_end( args );
+    
+    // return our bad news...
+    result_slOptions result;
+    result.type = type;
+    result.msg = errMsg;
+    return result;
+}
+
+// Test the argument to see if it represents a valid serial port.  On failure, return an error.
+static result_slOptions parsePort( void* ptrArg, int intArg, const optionDef_slOptions *def, const char *arg, clientData_slOptions *clientData ) {
+
+    int vsd = verifySerialDevice( arg );
+    switch( vsd ) {
+        case VSD_IS_SERIAL:
+            clientData->port = arg;
+            result_slOptions result = { resultOk, NULL };
+            return result;
+        case VSD_NULL:          return parseMsgHelper( def, resultError, "no serial device was specified" );
+        case VSD_NOT_TERMINAL:  return parseMsgHelper( def, resultError, "\"%s\" is not a terminal", arg );
+        case VSD_CANT_OPEN:     return parseMsgHelper( def, resultError, "\"%s\" cannot be opened", arg );
+        case VSD_NONEXISTENT:   return parseMsgHelper( def, resultError, "\"%s\" doesn't exist", arg );
+        case VSD_NOT_CHARACTER: return parseMsgHelper( def, resultError, "\"%s\" is not a character device", arg );
+        case VSD_NOT_DEVICE:    return parseMsgHelper( def, resultError, "\"%s\" is not a device", arg );
+        default:                return parseMsgHelper( def, resultError, "\"%s\" failed for unknown reasons (code %d)", arg, vsd );
+    }
+}
+
+
+// Parse the given argument, which is presumed to be a string representing a positive integer that is one of the
+// standard baud rates.  If the parsing fails for any reason, return an error
+static result_slOptions parseBaud( void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* clientData ) {
+
+    // make sure we can parse the entire argument into an integer...
+    char *endPtr;
+    int baud = (int) strtol( arg, &endPtr, 10 );
+    if( *endPtr != 0 ) return parseMsgHelper( def, resultError, "the specified baud rate (\"%s\") is not an integer", arg );
+
+    // make sure the result is a valid baud rate...
+    if( getBaudRateCookie( baud ) < 0 )
+        return parseMsgHelper( def, resultError, "the specified baud rate (\"%s\") is not a valid one (4800, 9600, 19200, etc.)", arg );
+
+    // we have a valid baud rate, so stuff it away and return in victory...
+    *((int*)ptrArg) = baud;
+    result_slOptions response = { resultOk, NULL };
+    return response;
+}
+
+
+// Parse autobaud, which has an optional argument of ascii, nmea, or ubx.
+static result_slOptions parseAutobaud( void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* clientData ) {
+
+    // if we get here, we couldn't find the argument...
+    if( !setSyncMethod( arg, clientData ) )
+        return parseMsgHelper( def, resultError, "the specified baud rate inference method (\"%s\") is unrecognizable; should be \"ascii\", \"nmea\", or \"ubx\"", arg );
+
+    result_slOptions result = { resultOk };
+    return result;
+}
+
+
+// Parse sync, which has an optional argument of ascii, nmea, or ubx.
+static result_slOptions parseSync( void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* clientData ) {
+
+    // if we get here, we couldn't find the argument...
+    if( !setSyncMethod( arg, clientData ) )
+        return parseMsgHelper( def, resultError, "the specified baud rate synchronization method (\"%s\") is unrecognizable; should be \"ascii\", \"nmea\", or \"ubx\"", arg );
+
+    result_slOptions result = { resultOk };
+    return result;
+}
+
+
+// Parse the given argument, which is presumed to be a string representing a yes or no value, which if parsed without
+// error is stored to the argPtr. If the parsing fails for any reason, return an error.
+static result_slOptions parseBool( void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* clientData ) {
+
+    // see if we've got anything that like a yes or true (otherwise, we make it a false)...
+    *((bool*)ptrArg) = (arg == NULL) ? false : (strchr( "yYtT1", *arg ) != NULL);
+
+    // then return with no error...
+    result_slOptions response = { resultOk, NULL };
+    return response;
+}
+
+
+// Parse the given argument, which is presumed to be a string representing an integer, which if parsed without error is
+// stored to the argPtr. If the parsing fails for any reason, return an error.
+static result_slOptions parseInt( void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* clientData ) {
+
+    // make sure we can parse the entire argument into an integer...
+    int n = 0;
+    if( arg != NULL ) {
+        char *endPtr;
+        n = (int) strtol(arg, &endPtr, 10);
+        if (*endPtr != 0)
+            return parseMsgHelper(def, resultError, "the specified %s (\"%s\") is not an integer", def->argName, arg);
+    }
+
+    // stuff it away to the given pointer...
+    *((int*)ptrArg) = n;
+
+    // then return with no error...
+    result_slOptions response = { resultOk, NULL };
+    return response;
+}
+
+
+// Set a boolean flag at the given ptrArg to the given intArg.
+static result_slOptions parseFlag( void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* clientData ) {
+
+    // do what we've been told to do...
+    *((bool*)ptrArg) = (bool) intArg;
+
+    // then return with no error...
+    result_slOptions response = { resultOk, NULL };
+    return response;
+}
+
+typedef struct { char* name; queryType queryType; } queryDef;
+static queryDef queryDefs[] = {
+        { "fix",     fixQuery     },
+        { "version", versionQuery }
+};
+
+
+// Parse the given query type and store the results.  Returns an error on any parsing problem.
+static result_slOptions parseQuery( void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* clientData ) {
+
+    // see what kind of query we've got here...
+    for( int i = 0; i < ARRAY_SIZE( queryDefs ); i++ ) {
+        if( 0 == strcmp( arg, queryDefs[i].name ) ) {
+            clientData->queryType = queryDefs[i].queryType;
+            result_slOptions response = { resultOk, NULL };
+            return response;
+        }
+    }
+
+    // if we get here then we have a bogus query type...
+    return parseMsgHelper( def, resultError, "the specified %s (\"%s\") is not a valid query type", def->argName, arg );
+}
+
+
+// Increment the int counter at the given ptrArg.
+static result_slOptions parseCount( void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* clientData ) {
+
+    // do what we've been told to do...
+    (*((int*)ptrArg))++;
+
+    // then return with no error...
+    result_slOptions response = { resultOk, NULL };
+    return response;
+}
+
+#undef V3
+#undef V2
+#undef V1
+#undef V0
+#undef CD
+
+
+// Sync may only be specified if auto baud rate was NOT specified...
+static result_slOptions  constrainSync( const optionDef_slOptions* defs, const psloConfig* config, const state_slOptions* state ) {
+    result_slOptions result = { resultOk };
+    if( hasShortOption_slOptions( 'a', state ) ) {
+        result.type = resultError;
+        result.msg = "-s, --sync may only be specified if -a, --autobaud is NOT specified";
+    }
+    return result;
+}
+
+
+// Baud may only be specified if auto baud rate was NOT specified...
+static result_slOptions  constrainBaud( const optionDef_slOptions* defs, const psloConfig* config, const state_slOptions* state ) {
+    result_slOptions result = { resultOk };
+    if( hasShortOption_slOptions( 'a', state ) ) {
+        result.type = resultError;
+        result.msg = "-b, --baud may only be specified if -a, --autobaud is NOT specified";
+    }
+    return result;
+}
+
+
+// Minbaud may only be specified if auto baud rate was specified...
+static result_slOptions  constrainMinBaud( const optionDef_slOptions* defs, const psloConfig* config, const state_slOptions* state ) {
+    result_slOptions result = { resultOk };
+    if( !hasShortOption_slOptions( 'a', state ) ) {
+        result.type = resultError;
+        result.msg = "-M, --minbaud may only be specified if -a, --autobaud is also specified";
+    }
+    return result;
+}
+
+#define CD (config->clientData)
+#define V0 (CD->verbosity >= 0)
+#define V1 (CD->verbosity >= 1)
+#define V2 (CD->verbosity >= 2)
+#define V3 (CD->verbosity >= 3)
+
+
+// Setup action function, which opens and configures the serial port.
+static result_slOptions actionSetup( const optionDef_slOptions* defs, const psloConfig* config ) {
+
+    result_slOptions resp = { resultOk };
+
+    // first we try opening the device for the port...
+    int fdPort = open( CD->port, O_RDWR | O_NOCTTY | O_NONBLOCK );
+    if( fdPort < 0 ) {
+        printf( "Failed to open serial port: %s\n", strerror( errno ) );
+        exit(1);
+    }
+    if( V2 ) printf( "Serial port (\"%s\") open...\n", CD->port );
+
+    // now we set the correct options (the configured baud rate, 8 data bits, 1 stop bit, no parity)
+    // note that this baud rate may be incorrect, and we might try to infer it in a moment...
+    stoResult result = setTermOptions( fdPort, CD->baud, 8, 1, false, false );
+    if( result != stoOK ) {
+        resp.type = resultError;
+        asprintf( &resp.msg, "Error when setting terminal options: %s\n", stoResultStr( result ) );
+        close( fdPort );
+        return resp;
+    }
+
+    // stuff our file descriptor and return in victory...
+    CD->fdPort = fdPort;
+    if( V1 ) printf( "Serial port open and configured...\n" );
+    return resp;
+
+    // TODO: move this code into separate actions for synchronizing or inferring...
+//    result = setBaudRate( fdPort, clientData->baud, clientData->synchronize, clientData->autobaud,
+//                          NMEABaudRateSynchronizer, clientData->verbose );
+//    int expected = (clientData->autobaud || clientData->synchronize) ? SBR_SET_SYNC : SBR_SET_NOSYNC;
+//    if( result != expected ) {
+//        switch( result ) {
+//            case SBR_INVALID:
+//                printf( "Baud rate is invalid or not specified!\n" );
+//                break;
+//            case SBR_FAILED_SYNC:
+//                printf( "Failed to synchronize serial port receiver!\n" );
+//                break;
+//            case SBR_PORT_ERROR:
+//                printf( "Error reading from serial port!\n" );
+//                break;
+//            default:
+//                printf( "Unknown error when setting baud rate (code: %d)!\n", result );
+//                break;
+//        }
+//        close( fdPort );
+//        exit( 1 );
+//    }
+
+}
+
+
+// Teardown action function, which closes the serial port.
+static result_slOptions  actionTeardown(  const optionDef_slOptions* defs, const psloConfig* config ) {
+
+    close( CD->fdPort );
+    result_slOptions resp = { resultOk };
+    return resp;
+}
+
+
+// Sync action function, which synchronizes serial port receiver with the data stream using the configured method.
+static result_slOptions  actionSync(  const optionDef_slOptions* defs, const psloConfig* config ) {
+
+    if( syncSerial( CD->syncMethod, CD->fdPort, CD->verbosity ) ) {
+        result_slOptions resp = {resultOk};
+        return resp;
+    }
+    else {
+        result_slOptions resp = {resultError};
+        resp.msg = "failed to synchronize";
+        return resp;
+    }
+}
+
+
+// Echo action function, which echoes NMEA data to stdout for a configurable period of time.
+static result_slOptions  actionEcho(  const optionDef_slOptions* defs, const psloConfig* config ) {
+
+    if( V2 ) printf( "Starting echo...\n" );
 
     // figure out our timing...
     long long startTime = currentTimeMs();
-    long long maxEchoMS = 1000 * maxSeconds;
+    long long maxEchoMS = 1000 * CD->echoSeconds;
 
-    while( (maxSeconds == 0) || ((currentTimeMs() - startTime) < maxEchoMS) ) {
-        int c = readSerialChar( fdPort, 1000 );
+    while( (CD->echoSeconds == 0) || ((currentTimeMs() - startTime) < maxEchoMS) ) {
+        int c = readSerialChar( CD->fdPort, 1000 );
         if( c >= 0 ) printf( "%c", c );
     }
 
-    if( verbose ) printf( "\nEnding echo...\n" );
+    if( V2 ) printf( "\nEnding echo...\n" );
+
+    result_slOptions resp = { resultOk };
+    return resp;
 }
 
 
@@ -565,7 +539,7 @@ static void newBaud( int fdPort, int newBaud, bool verbose ) {
 
 
 // Outputs a fix query, in English or JSON.
-static void fixQuery( int fdPort, bool json, bool verbose ) {
+static void doFixQuery( int fdPort, bool json, bool verbose ) {
 
     pvt_fix fix = {0}; // zeroes all elements...
     reportResponse result = getFix( fdPort, verbose, &fix );
@@ -643,7 +617,7 @@ static void fixQuery( int fdPort, bool json, bool verbose ) {
 
 
 // Outputs a version query, in English or JSON.
-static void versionQuery( int fdPort, bool json, bool verbose ) {
+static void doVersionQuery( int fdPort, bool json, bool verbose ) {
 
     ubxVersion version = {0};  // zeroes all elements...
     reportResponse result = getVersion( fdPort, verbose, &version );
@@ -689,8 +663,8 @@ static void query( int fdPort, int queryType, bool json, bool verbose ) {
 
     switch( queryType ) {
 
-        case 1: fixQuery( fdPort, json, verbose ); break;  // "fix"
-        case 2: versionQuery( fdPort, json, verbose );
+        case fixQuery:     doFixQuery(     fdPort, json, verbose ); break;
+        case versionQuery: doVersionQuery( fdPort, json, verbose ); break;
         default: break;
     }
 }
@@ -706,41 +680,182 @@ static void configureNmea( int fdPort, bool verbose, bool nmeaOn ) {
 }
 
 
+static const char *gpsctl_help = "Options:\n" \
+        "  -e, --echo      echo human-readable GPS (presumably NMEA) data to stdout for 'n' seconds (0 means forever)\n"
+        "  -j, --json      produces query results in JSON format instead of English\n"
+        "  -n  --nmea      configure whether the GPS sends NMEA data to the UART (see YES OR NO VALUES below)\n"
+        "\n"
+        "Query types:\n"
+        "   fix       reports latitude, longitude, altitude, and time with accuracy figures\n"
+        "   version   reports the version information from the GPS\n"
+        "\n"
+        "Yes or no values\n"
+        "   Yes       indicated by an initial character of 'y', 'Y', 't', 'T', or '1'\n"
+        "   No        indicated by anything else\n";
+
+
+static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientData ) {
+
+    optionDef_slOptions echoDef = {
+            1, "echo", 'e', argOptional,
+            parseInt, (void*) &clientData->echoSeconds, 0,
+            NULL,
+            actionEcho,
+            "seconds",
+            "echo human-readable GPS data to stdout for the given time (0 or unspecified means forever)"
+    };
+
+    optionDef_slOptions portDef = {
+            1, "port", 'p', argRequired,
+            parsePort, NULL, 0,
+            NULL,
+            NULL,
+            "device",
+            "specify the port device (default is '/dev/serial0')"
+    };
+
+    optionDef_slOptions autobaudDef = {
+            1, "autobaud", 'a', argOptional,
+            parseAutobaud, NULL, 0,
+            NULL,
+            NULL,
+            "method",
+            "infer baud rate using ascii, nmea, ubx data (default is ubx)"
+    };
+
+
+    optionDef_slOptions verboseDef = {
+            3, "verbose", 'v', argNone,
+            parseCount, (void*) &clientData->verbosity, 0,
+            NULL,
+            NULL,
+            NULL,
+            "get verbose messages"
+    };
+
+
+    optionDef_slOptions baudDef = {
+            1, "baud", 'b', argRequired,
+            parseBaud, (void*) &clientData->baud, 0,
+            constrainBaud,
+            NULL,
+            "baud rate",
+            "specify host baud rate (default is '9600'); any standard rate is allowed"
+    };
+
+
+    optionDef_slOptions minBaudDef = {
+            1, "minbaud", 'M', argRequired,
+            parseBaud, (void*) &clientData->minBaud, 0,
+            constrainMinBaud,
+            NULL,
+            "baud rate",
+            "specify minimum baud rate for autobaud (default is '9600'); any standard rate is allowed"
+    };
+
+
+    optionDef_slOptions newbaudDef = {
+            1, "newbaud", 'B', argRequired,
+            parseBaud, (void*) &clientData->newbaud, 0,
+            NULL,
+            NULL,
+            "baud rate",
+            "change the U-Blox and host baud rates to the specified standard rate"
+    };
+
+    optionDef_slOptions queryDef = {
+            1, "query", 'q', argRequired,
+            parseQuery, NULL, 0,
+            NULL,
+            NULL,
+            "query type",
+            "query the GPS for info (see \"Query types\" below)"
+    };
+
+    optionDef_slOptions nmeaDef = {
+            1, "nmea", 'n', argRequired,
+            parseBool, (void*) &clientData->nmea, 0,
+            NULL,
+            NULL,
+            "yes/no",
+            "configure whether the GPS sends NMEA data to the serial port (see \"Yes or no values\" below)"
+    };
+
+    optionDef_slOptions syncDef = {
+            1, "sync", 's', argOptional,
+            parseSync, NULL, 0,
+            constrainSync,
+            actionSync,
+            "method",
+            "synchronize using ascii, nmea, ubx data (default is ubx)"
+    };
+
+    optionDef_slOptions optionDefs[] = {
+            verboseDef,
+            autobaudDef,
+            baudDef,
+            syncDef,
+            newbaudDef,
+            minBaudDef,
+            portDef,
+            nmeaDef,
+            queryDef,
+            echoDef,
+            { 0 }
+    };
+
+    // allocate memory for our option definitions, and copy them in...
+    int numDefs = ARRAY_SIZE( optionDefs );
+    optionDef_slOptions* result = safeMalloc( sizeof( optionDefs ) );
+    for( int i = 0; i < numDefs; i++ )
+        result[i] = optionDefs[i];
+
+    return result;
+}
+
+static char* exampleText =
+            "Additional information:\n"
+            "   Query types:\n"
+            "      fix      returns position, altitude, and time information\n"
+            "      version  returns hardware and software version of the GPS\n"
+            "\n"
+            "Examples:\n"
+            "   gpsctl --port=/dev/serial1 --baud 9600 --echo=5\n"
+            "      Selects the serial port \"/dev/serial1\", sets the host serial port baud rate to 9600, and\n"
+            "      echoes any received characters (presumably NMEA data) to stdout.\n"
+            "   gpsctl -p /dev/serial1 -b 9600 -e=5\n"
+            "      Exactly the same as the preceding example, using short options.\n"
+            "\n"
+            "Yes or no values:\n"
+            "   Yes       indicated by an initial character of 'y', 'Y', 't', 'T', or '1'\n"
+            "   No        indicated by anything else\n"
+            "";
+
+
 // The entry point for gpsctl...
 int main( int argc, char *argv[] ) {
 
-    clientData_slOptions clientData;
+    // initialize our client data structure, and set defaults...
+    clientData_slOptions clientData = { 0 };
+    clientData.baud = 9600;
+    clientData.minBaud = 9600;
+    clientData.port = "/dev/serial0";
+    clientData.syncMethod = syncUBX;
+
     psloConfig config = {
-            new_options,                                        // our command-line option definitions...
+            getOptionDefs( &clientData ),                       // our command-line option definitions...
             &clientData,                                        // our options processing data structure...
+            NULL, NULL,                                         // before, after constraint-checking functions...
+            actionSetup, actionTeardown,                        // before, after action functions.
             "gpsctl",                                           // name of gpsctl...
             "0.5",                                              // version of gpsctl...
+            exampleText,                                        // usage examples...
             SL_OPTIONS_CONFIG_NORMAL                            // slOptions configuration options...
     };
+
     psloResponse resp = process_slOptions(argc, (const char **) argv, &config );
 
+    if( resp.error ) printf( "Error: %s\n", resp.errMsg );
+
     exit( EXIT_SUCCESS );
-
-    struct parsed_args pas = {.verbose = false };  // initializes all members to zeroes...
-
-
-    if( getOptions( argc, argv, &pas ) ) {
-
-        if( pas.version ) showVersion();
-        if( pas.usage   ) showUsage();
-        if( pas.help    ) showHelp();
-
-        // open and set up our serial port...
-        int fdPort = openSerialPort( &pas );
-
-        if( pas.nmea      ) configureNmea( fdPort, pas.verbose, pas.nmeaState );
-        if( pas.queryType ) query( fdPort, pas.queryType, pas.json, pas.verbose );
-        if( pas.newbaud   ) newBaud( fdPort, pas.newbaud, pas.verbose );
-        if( pas.echo      ) echo( fdPort, pas.verbose, pas.echoMax );
-
-        close( fdPort );
-        exit( EXIT_SUCCESS );
-    }
-    printf( "Errors prevented gpsctl from running..." );
-    exit( EXIT_FAILURE );
 }

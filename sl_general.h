@@ -51,8 +51,6 @@ uint32_t daysInMonth( uint32_t year, uint32_t month );
 
 char* getAllocatedStringCopy( const char *source );
 
-void readErrno( int en );
-
 // Returns the number of arguments that have been passed to it.
 #define NUMARGS(...) NUMARGS_(__VA_ARGS__,RSEQ_N())
 #define NUMARGS_(...) NUMARGS_N(__VA_ARGS__)

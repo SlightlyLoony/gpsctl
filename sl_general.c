@@ -142,29 +142,3 @@ extern char* getAllocatedStringCopy( const char *source ) {
     strcpy( result, source );
     return result;
 }
-
-
-// Prints a message about an error occurring during an invocation of read().
-extern void readErrno( int en ) {
-    printf( "read() ERROR: " );
-    switch( en ) {
-        case EAGAIN:
-            printf( "no data available in non-blocking mode\n" );
-            break;
-        case EBADF:
-            printf( "file descriptor is not valid\n" );
-            break;
-        case EINTR:
-            printf( "interrupted by signal\n" );
-            break;
-        case EIO:
-            printf( "hardware error or trying to read from controlling terminal\n" );
-            break;
-        case EINVAL:
-            printf( "invalid block size or alignment\n" );
-            break;
-        default:
-            printf( "unknown error code (%d)\n", en );
-            break;
-    }
-}
