@@ -31,16 +31,13 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-// TODO: rethink command-line options, ESPECIALLY for baud rate setting
 // TODO: add save configuration
 // TODO: add set stationary or portable mode
-// TODO: add UBX-only synchronizer (so it will synchronize even without NMEA data)
-// TODO: choose sync type
 // TODO: set antenna and cable length specs
 // TODO: make sure we free any allocated slBuffers!
 // TODO: add needed printfs for verbose mode...
 // TODO: add filter for NMEA message types on echo, also message verifier (only echo good messages)
-// TODO: add constraint for autobaud and baud not simultaneously set
+// TODO: helper function (or macro?) for the awkward structure return values
 
 
 // these defines allow compiling on both an OS X development machine and the target Raspberry Pi.  If different
@@ -201,6 +198,125 @@ static bool syncSerial( const syncType type, const int fdPort, const int verbosi
     }
 }
 
+// TODO: better error handling here
+// Outputs a fix query, in English or JSON.
+static void doFixQuery( const clientData_slOptions* clientData ) {
+
+    pvt_fix fix = {0}; // zeroes all elements...
+    reportResponse result = getFix( clientData->fdPort, clientData->verbosity, &fix );
+    double msl_height_feet = 0.00328084 * fix.height_above_sea_level_mm;
+    double height_accuracy_feet = 0.00328084 * fix.height_accuracy_mm;
+    double horizontal_accuracy_feet = 0.00328084 * fix.horizontal_accuracy_mm;
+    double speed_mph = fix.ground_speed_mm_s * 0.00223694;
+    double speed_accuracy_mph = fix.ground_speed_accuracy_mm_s * 0.00223694;
+    if( result == reportOK ) {
+        if( clientData->json ) {
+            cJSON *root;
+            cJSON *objFix;
+            cJSON *time;
+            root = cJSON_CreateObject();
+
+            cJSON_AddItemToObject( root, "fix", objFix = cJSON_CreateObject() );
+            cJSON_AddNumberToObject( objFix, "latitude_deg", fix.latitude_deg );
+            cJSON_AddNumberToObject( objFix, "longitude_deg", fix.longitude_deg );
+            cJSON_AddNumberToObject( objFix, "height_above_ellipsoid_mm", fix.height_above_ellipsoid_mm );
+            cJSON_AddNumberToObject( objFix, "height_above_mean_sea_level_mm", fix.height_above_sea_level_mm );
+            cJSON_AddNumberToObject( objFix, "horizontal_accuracy_mm", fix.horizontal_accuracy_mm );
+            cJSON_AddNumberToObject( objFix, "height_accuracy_mm", fix.height_accuracy_mm );
+            cJSON_AddNumberToObject( objFix, "ground_speed_mm_sec", fix.ground_speed_mm_s );
+            cJSON_AddNumberToObject( objFix, "ground_speed_accuracy_mm_sec", fix.ground_speed_accuracy_mm_s );
+            cJSON_AddNumberToObject( objFix, "heading_deg", fix.heading_deg );
+            cJSON_AddNumberToObject( objFix, "heading_accuracy_deg", fix.heading_accuracy_deg );
+            cJSON_AddBoolToObject( objFix, "valid", fix.fix_valid );
+            cJSON_AddBoolToObject( objFix, "3d", fix.fix_is_3d );
+
+            cJSON_AddNumberToObject( root, "number_of_satellites_used", fix.number_of_satellites_used );
+
+            cJSON_AddItemToObject( root, "time", time = cJSON_CreateObject() );
+            cJSON_AddNumberToObject( time, "month", fix.month );
+            cJSON_AddNumberToObject( time, "day", fix.day );
+            cJSON_AddNumberToObject( time, "year", fix.year );
+            cJSON_AddNumberToObject( time, "hour", fix.hour );
+            cJSON_AddNumberToObject( time, "minute", fix.minute );
+            cJSON_AddNumberToObject( time, "second", fix.second );
+            cJSON_AddNumberToObject( time, "accuracy_ns", fix.time_accuracy_ns );
+            cJSON_AddBoolToObject( time, "valid", fix.time_valid );
+            cJSON_AddBoolToObject( time, "resolved", fix.time_resolved );
+
+            char *jsonStr = cJSON_PrintUnformatted( root );
+            printf( "%s\n", jsonStr );
+
+            cJSON_Delete( root );
+        }
+        else {
+            if( fix.time_resolved && fix.time_valid && fix.date_valid )
+                printf( " Time (UTC): %02d/%02d/%04d %02d:%02d:%02.0f (mm/dd/yyyy hh:mm:ss)\n",
+                        fix.month, fix.day, fix.year, fix.hour, fix.minute, fix.second );
+            else
+                printf( " Time (UTC): not resolved or not valid\n" );
+            if( fix.fix_valid ) {
+                printf( "   Latitude: %12.8f %c\n", fabs(fix.latitude_deg), (fix.latitude_deg < 0) ? 'S' : 'N');
+                printf( "  Longitude: %12.8f %c\n", fabs(fix.longitude_deg), (fix.longitude_deg < 0) ? 'W' : 'E');
+                if( fix.fix_is_3d )
+                    printf( "   Altitude: %.3f feet\n", msl_height_feet);
+                else
+                    printf( "   Altitude: unknown\n" );
+                printf( "     Motion: %.3f mph at %.3f degrees heading\n", speed_mph, fix.heading_deg);
+            }
+            else
+                printf( "        Fix: invalid\n" );
+            printf( " Satellites: %d (used for computing this fix)\n", fix.number_of_satellites_used );
+            printf( "   Accuracy: time (%d ns), height (+/-%.3f feet), position (+/-%.3f feet), heading(+/-%.3f degrees), speed(+/-%.3f mph)\n",
+                    fix.time_accuracy_ns, height_accuracy_feet, horizontal_accuracy_feet, fix.heading_accuracy_deg, speed_accuracy_mph );
+        }
+    }
+    else {
+        printf( "Problem getting fix information from GPS!\n" );
+        exit(1);
+    }
+}
+
+// TODO: better error handling here...
+// Outputs a version query, in English or JSON.
+static void doVersionQuery( const clientData_slOptions* clientData ) {
+
+    ubxVersion version = {0};  // zeroes all elements...
+    reportResponse result = getVersion( clientData->fdPort, clientData->verbosity, &version );
+
+    if( result == reportOK ) {
+
+        if( clientData->json ) {
+
+            cJSON *root;
+            root = cJSON_CreateObject();
+            cJSON_AddItemToObject( root, "software_version", cJSON_CreateString( version.software ) );
+            cJSON_AddItemToObject( root, "hardware_version", cJSON_CreateString( version.hardware ) );
+            cJSON_AddItemToObject( root, "extensions",
+                                   cJSON_CreateStringArray( (const char**) version.extensions, version.number_of_extensions ) );
+
+            char *jsonStr = cJSON_PrintUnformatted( root );
+            printf( "%s\n", jsonStr );
+
+            cJSON_Delete( root );
+        }
+        else {
+            printf( "Software version: %s\n", version.software );
+            free( version.software );
+            printf( "Hardware version: %s\n", version.hardware );
+            free( version.hardware );
+            char **ptr = version.extensions;
+            while( (*ptr) != NULL ) {
+                printf( "       Extension: %s\n", *ptr );
+                free( (*ptr) );
+                ptr++;
+            }
+        }
+    }
+    else {
+        printf( "Problem getting version information from GPS!\n" );
+        exit(1);
+    }
+}
 
 
 // Helper function to create error messages with given meta pattern, the subpattern, and arguments embedded.  Returns an
@@ -400,6 +516,17 @@ static result_slOptions  constrainSync( const optionDef_slOptions* defs, const p
 }
 
 
+// JSON may only be specified if a query was specified...
+static result_slOptions  constrainJSON( const optionDef_slOptions* defs, const psloConfig* config, const state_slOptions* state ) {
+    result_slOptions result = { resultOk };
+    if( !hasShortOption_slOptions( 'q', state ) ) {
+        result.type = resultError;
+        result.msg = "-j, --json may only be specified if -a, --query is also specified";
+    }
+    return result;
+}
+
+
 // Baud may only be specified if auto baud rate was NOT specified...
 static result_slOptions  constrainBaud( const optionDef_slOptions* defs, const psloConfig* config, const state_slOptions* state ) {
     result_slOptions result = { resultOk };
@@ -506,6 +633,38 @@ static result_slOptions  actionSync(  const optionDef_slOptions* defs, const psl
 }
 
 
+// NMEA action function, which turns NMEA data on or off on the U-Blox GPS.
+static result_slOptions  actionNMEA(  const optionDef_slOptions* defs, const psloConfig* config ) {
+
+    clientData_slOptions* cd = config->clientData;
+    configResponse resp = setNMEAData(cd->fdPort, cd->verbosity, cd->nmea);
+    if( resp == configError ) {
+        result_slOptions result = {resultError};
+        result.msg = "failed to set NMEA data mode";
+        return result;
+    }
+    else {
+        result_slOptions result = {resultOk};
+        return result;
+    }
+}
+
+
+// Query action function, which queries the U-Blox GPS for the specified data.
+static result_slOptions  actionQuery(  const optionDef_slOptions* defs, const psloConfig* config ) {
+
+    switch( config->clientData->queryType ) {
+
+        case fixQuery:     doFixQuery(     config->clientData ); break;
+        case versionQuery: doVersionQuery( config->clientData ); break;
+        default: break;
+    }
+
+    result_slOptions resp = {resultOk};
+    return resp;
+}
+
+
 // Echo action function, which echoes NMEA data to stdout for a configurable period of time.
 static result_slOptions  actionEcho(  const optionDef_slOptions* defs, const psloConfig* config ) {
 
@@ -536,162 +695,6 @@ static void newBaud( int fdPort, int newBaud, bool verbose ) {
         exit(1);
     }
 }
-
-
-// Outputs a fix query, in English or JSON.
-static void doFixQuery( int fdPort, bool json, bool verbose ) {
-
-    pvt_fix fix = {0}; // zeroes all elements...
-    reportResponse result = getFix( fdPort, verbose, &fix );
-    double msl_height_feet = 0.00328084 * fix.height_above_sea_level_mm;
-    double height_accuracy_feet = 0.00328084 * fix.height_accuracy_mm;
-    double horizontal_accuracy_feet = 0.00328084 * fix.horizontal_accuracy_mm;
-    double speed_mph = fix.ground_speed_mm_s * 0.00223694;
-    double speed_accuracy_mph = fix.ground_speed_accuracy_mm_s * 0.00223694;
-    if( result == reportOK ) {
-        if( json ) {
-            cJSON *root;
-            cJSON *objFix;
-            cJSON *time;
-            root = cJSON_CreateObject();
-
-            cJSON_AddItemToObject( root, "fix", objFix = cJSON_CreateObject() );
-            cJSON_AddNumberToObject( objFix, "latitude_deg", fix.latitude_deg );
-            cJSON_AddNumberToObject( objFix, "longitude_deg", fix.longitude_deg );
-            cJSON_AddNumberToObject( objFix, "height_above_ellipsoid_mm", fix.height_above_ellipsoid_mm );
-            cJSON_AddNumberToObject( objFix, "height_above_mean_sea_level_mm", fix.height_above_sea_level_mm );
-            cJSON_AddNumberToObject( objFix, "horizontal_accuracy_mm", fix.horizontal_accuracy_mm );
-            cJSON_AddNumberToObject( objFix, "height_accuracy_mm", fix.height_accuracy_mm );
-            cJSON_AddNumberToObject( objFix, "ground_speed_mm_sec", fix.ground_speed_mm_s );
-            cJSON_AddNumberToObject( objFix, "ground_speed_accuracy_mm_sec", fix.ground_speed_accuracy_mm_s );
-            cJSON_AddNumberToObject( objFix, "heading_deg", fix.heading_deg );
-            cJSON_AddNumberToObject( objFix, "heading_accuracy_deg", fix.heading_accuracy_deg );
-            cJSON_AddBoolToObject( objFix, "valid", fix.fix_valid );
-            cJSON_AddBoolToObject( objFix, "3d", fix.fix_is_3d );
-
-            cJSON_AddNumberToObject( root, "number_of_satellites_used", fix.number_of_satellites_used );
-
-            cJSON_AddItemToObject( root, "time", time = cJSON_CreateObject() );
-            cJSON_AddNumberToObject( time, "month", fix.month );
-            cJSON_AddNumberToObject( time, "day", fix.day );
-            cJSON_AddNumberToObject( time, "year", fix.year );
-            cJSON_AddNumberToObject( time, "hour", fix.hour );
-            cJSON_AddNumberToObject( time, "minute", fix.minute );
-            cJSON_AddNumberToObject( time, "second", fix.second );
-            cJSON_AddNumberToObject( time, "accuracy_ns", fix.time_accuracy_ns );
-            cJSON_AddBoolToObject( time, "valid", fix.time_valid );
-            cJSON_AddBoolToObject( time, "resolved", fix.time_resolved );
-
-            char *jsonStr = cJSON_PrintUnformatted( root );
-            printf( "%s\n", jsonStr );
-
-            cJSON_Delete( root );
-        }
-        else {
-            if( fix.time_resolved && fix.time_valid && fix.date_valid )
-                printf( " Time (UTC): %02d/%02d/%04d %02d:%02d:%02.0f (mm/dd/yyyy hh:mm:ss)\n",
-                        fix.month, fix.day, fix.year, fix.hour, fix.minute, fix.second );
-            else
-                printf( " Time (UTC): not resolved or not valid\n" );
-            if( fix.fix_valid ) {
-                printf( "   Latitude: %12.8f %c\n", fabs(fix.latitude_deg), (fix.latitude_deg < 0) ? 'S' : 'N');
-                printf( "  Longitude: %12.8f %c\n", fabs(fix.longitude_deg), (fix.longitude_deg < 0) ? 'W' : 'E');
-                if( fix.fix_is_3d )
-                    printf( "   Altitude: %.3f feet\n", msl_height_feet);
-                else
-                    printf( "   Altitude: unknown\n" );
-                printf( "     Motion: %.3f mph at %.3f degrees heading\n", speed_mph, fix.heading_deg);
-            }
-            else
-                printf( "        Fix: invalid\n" );
-            printf( " Satellites: %d (used for computing this fix)\n", fix.number_of_satellites_used );
-            printf( "   Accuracy: time (%d ns), height (+/-%.3f feet), position (+/-%.3f feet), heading(+/-%.3f degrees), speed(+/-%.3f mph)\n",
-                    fix.time_accuracy_ns, height_accuracy_feet, horizontal_accuracy_feet, fix.heading_accuracy_deg, speed_accuracy_mph );
-        }
-    }
-    else {
-        printf( "Problem getting fix information from GPS!" );
-        exit(1);
-    }
-}
-
-
-// Outputs a version query, in English or JSON.
-static void doVersionQuery( int fdPort, bool json, bool verbose ) {
-
-    ubxVersion version = {0};  // zeroes all elements...
-    reportResponse result = getVersion( fdPort, verbose, &version );
-
-    if( result == reportOK ) {
-
-        if( json ) {
-
-            cJSON *root;
-            root = cJSON_CreateObject();
-            cJSON_AddItemToObject( root, "software_version", cJSON_CreateString( version.software ) );
-            cJSON_AddItemToObject( root, "hardware_version", cJSON_CreateString( version.hardware ) );
-            cJSON_AddItemToObject( root, "extensions",
-                                   cJSON_CreateStringArray( (const char**) version.extensions, version.number_of_extensions ) );
-
-            char *jsonStr = cJSON_PrintUnformatted( root );
-            printf( "%s\n", jsonStr );
-
-            cJSON_Delete( root );
-        }
-        else {
-            printf( "Software version: %s\n", version.software );
-            free( version.software );
-            printf( "Hardware version: %s\n", version.hardware );
-            free( version.hardware );
-            char **ptr = version.extensions;
-            while( (*ptr) != NULL ) {
-                printf( "       Extension: %s\n", *ptr );
-                free( (*ptr) );
-                ptr++;
-            }
-        }
-    }
-    else {
-        printf( "Problem getting version information from GPS!" );
-        exit(1);
-    }
-}
-
-
-// Query the GPS for different things.
-static void query( int fdPort, int queryType, bool json, bool verbose ) {
-
-    switch( queryType ) {
-
-        case fixQuery:     doFixQuery(     fdPort, json, verbose ); break;
-        case versionQuery: doVersionQuery( fdPort, json, verbose ); break;
-        default: break;
-    }
-}
-
-
-// Set whether the GPS emits NMEA data on the UART...
-static void configureNmea( int fdPort, bool verbose, bool nmeaOn ) {
-    configResponse resp = setNmeaData( fdPort, verbose, nmeaOn );
-    if( resp == configError ) {
-        printf( "Could not configure NMEA data!\n" );
-        exit(1);
-    }
-}
-
-
-static const char *gpsctl_help = "Options:\n" \
-        "  -e, --echo      echo human-readable GPS (presumably NMEA) data to stdout for 'n' seconds (0 means forever)\n"
-        "  -j, --json      produces query results in JSON format instead of English\n"
-        "  -n  --nmea      configure whether the GPS sends NMEA data to the UART (see YES OR NO VALUES below)\n"
-        "\n"
-        "Query types:\n"
-        "   fix       reports latitude, longitude, altitude, and time with accuracy figures\n"
-        "   version   reports the version information from the GPS\n"
-        "\n"
-        "Yes or no values\n"
-        "   Yes       indicated by an initial character of 'y', 'Y', 't', 'T', or '1'\n"
-        "   No        indicated by anything else\n";
 
 
 static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientData ) {
@@ -734,6 +737,16 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
     };
 
 
+    optionDef_slOptions jsonDef = {
+            3, "json", 'j', argNone,
+            parseFlag, (void*) &clientData->json, 1,
+            constrainJSON,
+            NULL,
+            NULL,
+            "select JSON query output"
+    };
+
+
     optionDef_slOptions baudDef = {
             1, "baud", 'b', argRequired,
             parseBaud, (void*) &clientData->baud, 0,
@@ -767,7 +780,7 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
             1, "query", 'q', argRequired,
             parseQuery, NULL, 0,
             NULL,
-            NULL,
+            actionQuery,
             "query type",
             "query the GPS for info (see \"Query types\" below)"
     };
@@ -776,7 +789,7 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
             1, "nmea", 'n', argRequired,
             parseBool, (void*) &clientData->nmea, 0,
             NULL,
-            NULL,
+            actionNMEA,
             "yes/no",
             "configure whether the GPS sends NMEA data to the serial port (see \"Yes or no values\" below)"
     };
@@ -799,6 +812,7 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
             minBaudDef,
             portDef,
             nmeaDef,
+            jsonDef,
             queryDef,
             echoDef,
             { 0 }

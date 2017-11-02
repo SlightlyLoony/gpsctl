@@ -326,7 +326,7 @@ static void correctTime( pvt_fix *fix ) {
 
 // Fills the fix structure at the given pointer with information about a time and position fix obtained from the
 // GPS system.  Returns the appropriate reportResponse value.
-extern reportResponse getFix( int fdPort, bool verbose, pvt_fix *fix ) {
+extern reportResponse getFix( int fdPort, int verbosity, pvt_fix *fix ) {
 
     // get a fix from the GPS...
     ubxPollResponse pollResp = pollUbx( fdPort, createUbxMsg( ut_NAV_PVT, create_slBuffer( 0, LittleEndian ) ) );
@@ -372,7 +372,7 @@ extern reportResponse getFix( int fdPort, bool verbose, pvt_fix *fix ) {
 
 // Fills the ubxVersion structure at the given pointer with information about the GPS's version.  Returns the
 // appropriate reportResponse value.
-extern reportResponse getVersion(int fdPort, bool verbose, ubxVersion *version ) {
+extern reportResponse getVersion(int fdPort, int verbosity, ubxVersion *version ) {
 
     ubxType type = { UBX_MON, UBX_MON_VER };
     slBuffer* body = create_slBuffer( 0, LittleEndian );
@@ -409,12 +409,17 @@ extern reportResponse getVersion(int fdPort, bool verbose, ubxVersion *version )
 
 extern bool ubxSynchronize( const int fdPort, const int verbosity ) {
 
-    // send the request message and wait for the response...
-    ubxType type = { UBX_MON, UBX_MON_VER };
-    slBuffer* body = create_slBuffer( 0, LittleEndian );
-    ubxMsg msg = createUbxMsg( type, body );
-    ubxPollResponse result = pollUbx( fdPort, msg );
-    return ( result.state == Ok );
+    // we're gonna try this up to 10 times...
+    for( int i = 0; i < 10; i++ ) {
+        // send the request message and wait for the response...
+        ubxType type = {UBX_MON, UBX_MON_VER};
+        slBuffer *body = create_slBuffer(0, LittleEndian);
+        ubxMsg msg = createUbxMsg(type, body);
+        ubxPollResponse result = pollUbx(fdPort, msg);
+        if (result.state == Ok) return true;
+        if( verbosity >= 3 ) printf( "." );
+    }
+    return false;
 }
 
 
@@ -432,13 +437,14 @@ static int isNmeaOn( int fdPort ) {
 }
 
 
+// TODO: better error handling here...
 // Configures whether the GPS transmits NMEA periodically on the UART.  Returns success or failure.
-extern configResponse setNmeaData( int fdPort, bool verbose, bool nmeaOn ) {
+extern configResponse setNMEAData(int fdPort, int verbosity, bool nmeaOn) {
 
     char* onoff = nmeaOn ? "on" : "off";
 
     // first we poll for the current configuration...
-    if( verbose ) printf( "Querying to see if GPS UART already has NMEA data turned %s...\n", onoff );
+    if( verbosity >= 3 ) printf( "Querying to see if GPS UART already has NMEA data turned %s...\n", onoff );
     int cn = isNmeaOn( fdPort );
     if( cn < 0 ) {
         printf( "Querying for state of GPS UART failed!\n" );
@@ -447,12 +453,12 @@ extern configResponse setNmeaData( int fdPort, bool verbose, bool nmeaOn ) {
 
     // if we're already in the state we want, just leave...
     if( cn == nmeaOn ) {
-        if( verbose ) printf( "GPS UART already has NMEA data turned %s...\n", onoff );
+        if( verbosity >= 3 ) printf( "GPS UART already has NMEA data turned %s...\n", onoff );
         return configOK;
     }
 
     // change the configuration to the way we want it, starting with polling it again...
-    if( verbose ) printf( "Polling GPS UART configuration...\n" );
+    if( verbosity >= 3 ) printf( "Polling GPS UART configuration...\n" );
     ubxPollResponse current
             = pollUbx( fdPort, createUbxMsg( ut_CFG_PRT, init_slBuffer( LittleEndian, 1 /* UBX_CFG_PRT_UART_ID */ ) ) );
     if( current.state != Ok ) return configError;
@@ -462,14 +468,14 @@ extern configResponse setNmeaData( int fdPort, bool verbose, bool nmeaOn ) {
     put_uint16_slBuffer( bdy, 14, (uint16_t) setBit_slBits( get_uint16_slBuffer( bdy, 14 ), 1, nmeaOn ) );
 
     // send out the message to actually make the change...
-    if( verbose ) printf( "Sending new configuration to GPS with NMEA data turned %s for the UART...\n", onoff );
+    if( verbosity >= 3 ) printf( "Sending new configuration to GPS with NMEA data turned %s for the UART...\n", onoff );
     ackResponse ackResp = sendUbxAckedMsg( fdPort, createUbxMsg( ut_CFG_PRT, bdy ) );
     if( ackResp == ackACK ) {
-        if( verbose ) printf( "Successfully set new configuration to turn NMEA data %s for GPS UART...\n", onoff );
+        if( verbosity >= 1 ) printf( "Successfully set new configuration to turn NMEA data %s for GPS UART...\n", onoff );
         return configOK;
     }
     else {
-        if( verbose ) printf( "Failed to change GPS UART configuration to turn NMEA data %s...\n", onoff );
+        if( verbosity >= 1 ) printf( "Failed to change GPS UART configuration to turn NMEA data %s...\n", onoff );
         return configError;
     }
 }
@@ -478,7 +484,7 @@ extern configResponse setNmeaData( int fdPort, bool verbose, bool nmeaOn ) {
 static configResponse checkNMEA( int fdPort, int nmea, bool verbose ) {
     if( nmea != 1 ) return configOK;
     if( verbose ) printf( "Turning NMEA data back on...\n" );
-    return setNmeaData( fdPort, verbose, true );
+    return setNMEAData(fdPort, verbose, true);
 }
 
 
@@ -494,7 +500,7 @@ extern changeBaudResponse changeBaudRate( int fdPort, unsigned int newBaudRate, 
         if( verbose ) printf( "NMEA data is turned on, so turning it off...\n" );
 
         // turn NMEA data off, wait a second for the accumulated data to be transmitted, then flush everything...
-        configResponse ans = setNmeaData( fdPort, verbose, false );
+        configResponse ans = setNMEAData(fdPort, verbose, false);
         if( ans != configOK ) return ChangeBaudFailure;
         sleep( 1 );
         tcflush( fdPort, TCIOFLUSH );

@@ -162,14 +162,14 @@ static void warningMessageHelper( const result_slOptions response, const char* c
 static psloResponse addOptionRecord( state_slOptions* state, const optionDef_slOptions* def ) {
 
     // make sure we have room to record this one...
-    if( state->numOptionRecords >= MAX_SL_OPTIONS ) return errorMessageHelper( state->debug, "exceeded maximum number of options (%d)", "parsing", MAX_SL_OPTIONS);
+    if( state->numOptionRecords >= MAX_SL_OPTIONS ) return errorMessageHelper( state->debug, "parsing", "exceeded maximum number of options (%d)", MAX_SL_OPTIONS);
 
     // make sure this definition hasn't already been recorded the max number of times...
     int hits = 0;
     for( int i = 0; i < state->numOptionRecords; i++ )
         if( def == (state->optionRecords[i]).def )
             hits++;
-    if( hits >= def->maxCount ) return errorMessageHelper( state->debug, "too many occurrences of option \"%s\": max is %d", "parsing", getName_slOptions( def ), def->maxCount );
+    if( hits >= def->maxCount ) return errorMessageHelper( state->debug, "parsing", "too many occurrences of option \"%s\": max is %d", getName_slOptions( def ), def->maxCount );
 
     // ok, all is well - record it...
     (state->optionRecords[state->numOptionRecords]).def = def;
@@ -194,37 +194,37 @@ static psloResponse validateConfig( const psloConfig* config ) {
     bool debug = (0 != (config->options & SL_OPTIONS_CONFIG_DEBUG));
 
     // make sure we've got an options definition array...
-    if( config->optionDefs == NULL ) return errorMessageHelper( debug, "no option definitions configured", "validation" );
+    if( config->optionDefs == NULL ) return errorMessageHelper( debug, "validation", "no option definitions configured" );
 
     // iterate over all the supplied definitions, making sure that all required arguments are present...
     int n = 0;
     for( optionDef_slOptions* curDef = config->optionDefs; curDef->maxCount != 0; curDef++, n++ ) {
         if( (curDef->longOpt == NULL) && (curDef->shortOpt == 0) )
-            return errorMessageHelper( debug, "option definition %d has neither a short form or a long form specified", "validation", n );
+            return errorMessageHelper( debug, "validation", "option definition %d has neither a short form or a long form specified", n );
         if( (curDef->shortOpt != 0) && !isprint( curDef->shortOpt ) )
-            return errorMessageHelper( debug, "option definition '%s' has an invalid short name with character code: %d", "validation", getName_slOptions( curDef ), curDef->shortOpt );
+            return errorMessageHelper( debug, "validation", "option definition '%s' has an invalid short name with character code: %d", getName_slOptions( curDef ), curDef->shortOpt );
         if( (curDef->longOpt != NULL) && (NULL != strchr( curDef->longOpt, '=' )) )
-            return errorMessageHelper( debug, "option definition '%s' contains an equal sign (\"=\"): '%s'", "validation", getName_slOptions( curDef ), curDef->longOpt );
+            return errorMessageHelper( debug, "validation", "option definition '%s' contains an equal sign (\"=\"): '%s'", getName_slOptions( curDef ), curDef->longOpt );
         if( (curDef->longOpt != NULL) && !issgraph( curDef->longOpt ) )
-            return errorMessageHelper( debug, "option definition '%s' has an invalid long name: '%s'", "validation", getName_slOptions( curDef ), curDef->longOpt );
+            return errorMessageHelper( debug, "validation", "option definition '%s' has an invalid long name: '%s'", getName_slOptions( curDef ), curDef->longOpt );
         if( (curDef->maxCount < 0) || (curDef->maxCount > MAX_SL_OPTIONS) )
-            return errorMessageHelper( debug, "option definition '%s' has a maxCount out of range %d", "validation", getName_slOptions( curDef ), curDef->maxCount );
+            return errorMessageHelper( debug, "validation", "option definition '%s' has a maxCount out of range %d", getName_slOptions( curDef ), curDef->maxCount );
         if( strempty( curDef->helpMsg ) )
-            return errorMessageHelper( debug, "option definition '%'s has no help message specified", "validation", getName_slOptions( curDef ) );
+            return errorMessageHelper( debug, "validation", "option definition '%'s has no help message specified", getName_slOptions( curDef ) );
         if( (curDef->arg != argNone) && strempty( curDef->argName) )
-            return errorMessageHelper( debug, "option definition '%s' can have an argument, but has no argument name specified", "validation", getName_slOptions( curDef ) );
+            return errorMessageHelper( debug, "validation", "option definition '%s' can have an argument, but has no argument name specified", getName_slOptions( curDef ) );
         if( (curDef->shortOpt == ' ') && (curDef->arg != argNone) )
-            return errorMessageHelper( debug, "single-hyphen option cannot have an argument", "validation" );
+            return errorMessageHelper( debug, "validation", "single-hyphen option cannot have an argument" );
         if( (curDef->shortOpt == ' ') && !strempty( curDef->longOpt ) )
-            return errorMessageHelper( debug, "single-hyphen option cannot have a long name", "validation" );
+            return errorMessageHelper( debug, "validation", "single-hyphen option cannot have a long name" );
 
         // iterate over the supplied definitions again to make sure we don't have a duplicate short or long name...
         for( optionDef_slOptions* chkDef = config->optionDefs; chkDef->maxCount != 0; chkDef++ ) {
             if( chkDef != curDef ) {
                 if( (curDef->shortOpt != 0) && (curDef->shortOpt == chkDef->shortOpt) )
-                    return errorMessageHelper( debug, "two option definitions have the same short name: %c", "validation", curDef->shortOpt );
+                    return errorMessageHelper( debug, "validation", "two option definitions have the same short name: %c", curDef->shortOpt );
                 if( (curDef->longOpt != NULL) && (chkDef->longOpt != NULL ) && (strcmp( curDef->longOpt, chkDef->longOpt ) == 0) )
-                    return errorMessageHelper( debug, "two option definitions have the same long name: %s", "validation", curDef->longOpt );
+                    return errorMessageHelper( debug, "validation", "two option definitions have the same long name: %s", curDef->longOpt );
             }
         }
     }
@@ -597,15 +597,15 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
                                 if( DEBUG ) printf( "Assigning argument \"%s\" to \"%s\" option\n", curOpt, LAST_OPT_REC.def->longOpt );
                             }
                             else
-                                return errorMessageHelper( DEBUG, "unexpected argument (\"%s\") for long option (\"%s\")", "parsing", ++curOpt, def->longOpt );
+                                return errorMessageHelper( DEBUG, "parsing", "unexpected argument (\"%s\") for long option (\"%s\")", ++curOpt, def->longOpt );
                         }
 
                         // otherwise, we've got something that makes no sense...
-                        else return errorMessageHelper( DEBUG, "invalid option argument (possibly missing the \"=\"): \"%s\"", "parsing", curOpt );
+                        else return errorMessageHelper( DEBUG, "parsing", "invalid option argument (possibly missing the \"=\"): \"%s\"", curOpt );
                     }
                 }
                 else
-                    return errorMessageHelper( DEBUG, "unrecognized long option (\"%s\") in argument %d", "parsing", curOpt, CUR_ARG_INDEX );
+                    return errorMessageHelper( DEBUG, "parsing", "unrecognized long option (\"%s\") in argument %d", curOpt, CUR_ARG_INDEX );
             }
 
             // otherwise, we have one or more one-character options - process them one-by-one...
@@ -624,7 +624,7 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
                         if (response.error) return response;
                     }
                     else
-                        return errorMessageHelper(DEBUG, "unrecognized single-hyphen option (\"-\") in argument %d", "parsing", CUR_ARG_INDEX);
+                        return errorMessageHelper(DEBUG, "parsing", "unrecognized single-hyphen option (\"-\") in argument %d", CUR_ARG_INDEX);
                 }
                 else {
                     char *curOpt = CUR_ARG + 1;
@@ -655,8 +655,8 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
 
                             // otherwise, someone fed us an option we don't know about...
                         else
-                            return errorMessageHelper(DEBUG,
-                                                      "unrecognized single character option (\"%c\") in argument %d", "parsing",
+                            return errorMessageHelper(DEBUG, "parsing",
+                                                      "unrecognized single character option (\"%c\") in argument %d",
                                                       *curOpt, CUR_ARG_INDEX);
                     }
                 }
@@ -696,7 +696,7 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
 
     // make sure the last option has an argument, if it requires one...
     if( (LAST_OPT_REC.def->arg == argRequired) && (LAST_OPT_REC.arg == NULL) )
-        return errorMessageHelper( DEBUG, "option [%s] missing required argument", "parsing", getName_slOptions( LAST_OPT_REC.def ) );
+        return errorMessageHelper( DEBUG, "parsing", "option [%s] missing required argument", getName_slOptions( LAST_OPT_REC.def ) );
 
     // return with an error-free response...
     psloResponse response = { argc - CUR_ARG_INDEX, false, NULL, &CUR_ARG };
@@ -714,7 +714,8 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
 #define DEBUG (state.debug)
 #define EH( result, class )                                      \
     if ((result).type == resultError) {                          \
-        return errorMessageHelper( DEBUG, (result).msg, class ); \
+        free( (void*) state.optDefs );                           \
+        return errorMessageHelper( DEBUG, class, (result).msg ); \
     } else if ((result).type == resultWarning) {                 \
         warningMessageHelper( result, class );                   \
     }
@@ -759,21 +760,13 @@ extern psloResponse process_slOptions( int argc, const char *argv[], const psloC
         if( rec->def->parse ) {
             result_slOptions result = rec->def->parse( rec->def->parsePtr, rec->def->parseInt, rec->def, rec->arg, config->clientData );
             EH( result, "parsing" )
-//            if (result.type == resultError) {
-//                return errorMessageHelper( DEBUG, result.msg, "parsing" );
-//            } else if (result.type == resultWarning) {
-//                warningMessageHelper( result, "parsing" );
-//            }
         }
     }
 
     if( DEBUG ) printf( "Starting individual option constraint phase\n" );
     if( config->beforeConstraint ) {
         result_slOptions cr = config->beforeConstraint( state.optDefs, config, &state );
-        if( cr.type == resultError )
-            return errorMessageHelper( DEBUG, cr.msg, "constraint" );
-        else if( cr.type == resultWarning )
-            warningMessageHelper( cr, "constraint" );
+        EH( cr, "constraint" )
     }
     optRecIteratorInit( &itState, state.optDefs );
     while( (rec = optRecIterator( &itState, &state )) != NULL ) {
@@ -781,29 +774,18 @@ extern psloResponse process_slOptions( int argc, const char *argv[], const psloC
         // if we have a constraint-checking function, call it...
         if( rec->def->cnstr ) {
             result_slOptions result = rec->def->cnstr( state.optDefs, config, &state );
-            if (result.type == resultError) {
-                free( (void*) state.optDefs );
-                return errorMessageHelper( DEBUG, result.msg, "constraint" );
-            } else if (result.type == resultWarning) {
-                warningMessageHelper( result, "constraint" );
-            }
+            EH( result, "constraint" )
         }
     }
     if( config->afterConstraint ) {
         result_slOptions cr = config->afterConstraint( state.optDefs, config, &state );
-        if( cr.type == resultError )
-            return errorMessageHelper( DEBUG, cr.msg, "constraint" );
-        else if( cr.type == resultWarning )
-            warningMessageHelper( cr, "constraint" );
+        EH( cr, "constraint" )
     }
 
     if( DEBUG ) printf( "Starting individual option action phase\n" );
     if( config->beforeAction ) {
         result_slOptions ar = config->beforeAction( state.optDefs, config );
-        if( ar.type == resultError )
-            return errorMessageHelper( DEBUG, ar.msg, "action" );
-        else if( ar.type == resultWarning )
-            warningMessageHelper( ar, "action" );
+        EH( ar, "action" )
     }
     optRecIteratorInit( &itState, state.optDefs );
     while( (rec = optRecIterator( &itState, &state )) != NULL ) {
@@ -811,20 +793,12 @@ extern psloResponse process_slOptions( int argc, const char *argv[], const psloC
         // if we have an action function, call it...
         if( rec->def->action ) {
             result_slOptions result = rec->def->action( state.optDefs, config );
-            if (result.type == resultError) {
-                free( (void*) state.optDefs );
-                return errorMessageHelper( DEBUG, result.msg, "action" );
-            } else if (result.type == resultWarning) {
-                warningMessageHelper( result, "action" );
-            }
+            EH( result, "action" )
         }
     }
     if( config->afterAction ) {
         result_slOptions ar = config->afterAction( state.optDefs, config );
-        if( ar.type == resultError )
-            return errorMessageHelper( DEBUG, ar.msg, "action" );
-        else if( ar.type == resultWarning )
-            warningMessageHelper( ar, "action" );
+        EH( ar, "action" )
     }
 
     free( (void*) state.optDefs );

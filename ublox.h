@@ -71,13 +71,13 @@ typedef struct ubxVersion {
     int number_of_extensions;
 } ubxVersion;
 
-reportResponse getVersion(int fdPort, bool verbose, ubxVersion *version );
+reportResponse getVersion(int fdPort, int verbosity, ubxVersion *version );
 
 changeBaudResponse changeBaudRate( int fdPort, unsigned int newBaudRate, bool verbose );
 
-reportResponse getFix( int fdPort, bool verbose, pvt_fix *fix );
+reportResponse getFix( int fdPort, int verbosity, pvt_fix *fix );
 
-configResponse setNmeaData( int fdPort, bool verbose, bool nmeaOn );
+configResponse setNMEAData(int fdPort, int verbosity, bool nmeaOn);
 
 bool ubxSynchronize( const int, const int );
 

@@ -276,6 +276,7 @@ extern bool synchronize( int fdPort, baudRateSynchronizer synchronizer, int verb
         }
 
         // are we synchronized yet?
+        if( verbosity >= 3 ) printf( "%c", c );
         if( synchronizer( (char) c, &state) ) {
             if( verbosity > 0 ) printf( "Synchronized at %d baud...\n", si.baudRate );
             return true;

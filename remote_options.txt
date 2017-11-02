@@ -1,1 +1,1 @@
--s ascii
+-s -q fix -j
