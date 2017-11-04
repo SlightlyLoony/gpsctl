@@ -6,34 +6,27 @@
 #define GPSCTL_SL_OPTIONS_H
 
 #include <stdio.h>
+#include "sl_return.h"
 #include "sl_buffer.h"
 
 typedef enum { argRequired, argOptional,    argNone          } argMode_slOptions;
-typedef enum { resultOk,  resultError,  resultWarning  } resultType_slOptions;
 
 typedef struct clientData_slOptions clientData_slOptions;  // a client-defined structure that typically contains the results of options parsing
 typedef struct state_slOptions state_slOptions;  // an slOptions-defined data structure containing the state of slOptions while it's processing
 
-typedef struct {
-    resultType_slOptions type;      // the result of processing the option
-    char* msg;                      // an error message if the result was not Ok
-} result_slOptions;                 // the return value from any parse, constraint, or action function
-
-// the response to a process_slOptions() call
+// the extra information in the return value from a process_slOptions() call
 typedef struct {
     int argc;       // the number of arguments remaining after processing options
-    bool error;     // true if a fatal error occurred in processing
-    char* errMsg;   // a string describing the error (always allocated)
     char** argv;    // a pointer to the remaining arguments (NULL if argc is zero)
-} psloResponse;
+} args_slOptions;
 
 typedef struct optionDef_slOptions optionDef_slOptions;
 
 typedef struct psloConfig psloConfig;
 
-typedef result_slOptions  parse_slOptions(  void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* );  // option parsing function def
-typedef result_slOptions  cnstr_slOptions(  const optionDef_slOptions*, const psloConfig*, const state_slOptions* );  // constraint checking function def
-typedef result_slOptions action_slOptions( const optionDef_slOptions*, const psloConfig* );  // action function def
+typedef slReturn  parse_slOptions(  void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* );  // option parsing function def
+typedef slReturn  cnstr_slOptions(  const optionDef_slOptions*, const psloConfig*, const state_slOptions* );  // constraint checking function def
+typedef slReturn action_slOptions( const optionDef_slOptions*, const psloConfig* );  // action function def
 
 struct optionDef_slOptions {
     unsigned int            maxCount;   // how many times this option may appear in a command line
@@ -74,7 +67,7 @@ struct psloConfig {
 
 bool hasShortOption_slOptions( char, const state_slOptions* );
 bool hasLongOption_slOptions( const char*, const state_slOptions* );
-psloResponse process_slOptions( int argc, const char *argv[], const psloConfig* config );
+slReturn process_slOptions( int argc, const char *argv[], const psloConfig* config );
 char* getName_slOptions( const optionDef_slOptions* );
 
 #endif //GPSCTL_SL_OPTIONS_H

@@ -5,16 +5,9 @@
 #ifndef GPSCTL_UBLOX_H
 #define GPSCTL_UBLOX_H
 
+#include "sl_return.h"
+
 typedef enum ubxState    { Valid, NotValid, NotPresent } ubxState;
-
-typedef enum ubxResponse { Ok, TxFail, InvalidPollResponse, NoPollResponse, UnexpectedPollResponse,
-    NAK, UnexpectedAck, InvalidAck, NoAck, None } ubxResponse;
-
-typedef enum changeBaudResponse { ChangeBaudOk, ChangeBaudFailure } changeBaudResponse;
-
-typedef enum reportResponse { reportOK, reportError } reportResponse;
-
-typedef enum configResponse { configOK, configError } configResponse;
 
 typedef struct ubxChecksum {
     byte ck_a;
@@ -25,6 +18,7 @@ typedef struct ubxType {
     byte class;
     byte id;
 } ubxType;
+
 #define UBX_ACK 0x05
 #define UBX_ACK_ACK 0x01
 #define UBX_ACK_NAK 0x00
@@ -71,13 +65,13 @@ typedef struct ubxVersion {
     int number_of_extensions;
 } ubxVersion;
 
-reportResponse getVersion(int fdPort, int verbosity, ubxVersion *version );
+slReturn getVersion(int fdPort, int verbosity, ubxVersion *version );
 
-changeBaudResponse changeBaudRate( int fdPort, unsigned int newBaudRate, bool verbose );
+slReturn changeBaudRate( int fdPort, unsigned int newBaudRate, int verbosity );
 
-reportResponse getFix( int fdPort, int verbosity, pvt_fix *fix );
+slReturn getFix( int fdPort, int verbosity, pvt_fix *fix );
 
-configResponse setNMEAData(int fdPort, int verbosity, bool nmeaOn);
+slReturn setNMEAData(int fdPort, int verbosity, bool nmeaOn);
 
 bool ubxSynchronize( const int, const int );
 

@@ -1,1 +1,1 @@
--s -q fix -j
+-s -q fixs

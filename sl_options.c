@@ -10,7 +10,9 @@
 #define _POSIX_C_SOURCE 199309L
 #define _GNU_SOURCE
 
+#include "sl_return.h"
 #include "sl_options.h"
+
 
 // TODO: break slOptions into its own project (static library?)
 
@@ -18,28 +20,28 @@
 #define MAX_SL_OPTIONS 100   // the maximum number of options that slOptions can parse...
 
 typedef struct {
-    const optionDef_slOptions* def;
-    char* arg;
+    const optionDef_slOptions *def;
+    char *arg;
 } procOptionRecord;
 
 
 struct state_slOptions {
-    const optionDef_slOptions* optDefs;             // the option definitions, possibly enhanced
+    const optionDef_slOptions *optDefs;             // the option definitions, possibly enhanced
     int remainingArgs;                              // the number of arguments we haven't yet processed
     int currentArgIndex;                            // the index of the argument we're currently working on
     procOptionRecord optionRecords[MAX_SL_OPTIONS]; // our list of parsed option records
     int numOptionRecords;                           // the number of parsed option records in optionRecords
-    char** ourArgv;                                 // our local and modifiable copy of the original argv
+    char **ourArgv;                                 // our local and modifiable copy of the original argv
     bool debug;                                     // true if debug tracing is on
 };
 
 
 // Returns true if there is a parsed option definition with the given short (single character) name.
-extern bool hasShortOption_slOptions( const char shortName, const state_slOptions* state ) {
+extern bool hasShortOption_slOptions( const char shortName, const state_slOptions *state ) {
 
     if( shortName == 0 ) return false;
     for( int i = 0; i < state->numOptionRecords; i++ ) {
-        if( (state->optionRecords[i].def->shortOpt != 0) && (shortName == state->optionRecords[i].def->shortOpt) )
+        if((state->optionRecords[i].def->shortOpt != 0) && (shortName == state->optionRecords[i].def->shortOpt))
             return true;
     }
     return false;
@@ -47,11 +49,12 @@ extern bool hasShortOption_slOptions( const char shortName, const state_slOption
 
 
 // Returns true if there is a parsed option definition with the given long name.
-extern bool hasLongOption_slOptions( const char* longName, const state_slOptions* state ) {
+extern bool hasLongOption_slOptions( const char *longName, const state_slOptions *state ) {
 
-    if( longName == NULL ) return false;
-    for( int i = 0; i < state->numOptionRecords; i++  ) {
-        if( (state->optionRecords[i].def->longOpt != NULL) && (0 == strcmp( longName, state->optionRecords[i].def->longOpt ) ) )
+    if( longName == NULL) return false;
+    for( int i = 0; i < state->numOptionRecords; i++ ) {
+        if((state->optionRecords[i].def->longOpt != NULL) &&
+           (0 == strcmp( longName, state->optionRecords[i].def->longOpt )))
             return true;
     }
     return false;
@@ -61,7 +64,7 @@ extern bool hasLongOption_slOptions( const char* longName, const state_slOptions
 // Returns a string identifying the option in the given optionDef_slOptions record.  The string may be of the form
 // "-l", "--long", or "-l, --long" depending on whether the short, long, or both option names are defined.  The string
 // returned has been allocated and should be deleted when no longer needed.
-extern char* getName_slOptions( const optionDef_slOptions* def ) {
+extern char *getName_slOptions( const optionDef_slOptions *def ) {
 
     // figure out how much memory we need for the result...
     size_t size = 0;
@@ -73,8 +76,8 @@ extern char* getName_slOptions( const optionDef_slOptions* def ) {
     size++;  // don't forget the terminating zero...
 
     // now allocate the memory and build the result...
-    char* result = safeMalloc( size );
-    char* ptr = result;
+    char *result = safeMalloc( size );
+    char *ptr = result;
     if( shortDefined ) {
         *ptr++ = '-';
         *ptr++ = def->shortOpt;
@@ -95,8 +98,8 @@ extern char* getName_slOptions( const optionDef_slOptions* def ) {
 
 // Searches through the client-defined options for one with a short option that matches the given character.  If such
 // an option is found, a pointer to it is returned - otherwise, NULL is returned.
-static const optionDef_slOptions* findByCharOption( char opt, const optionDef_slOptions* optionDefs ) {
-    const optionDef_slOptions* curDef = optionDefs;
+static const optionDef_slOptions *findByCharOption( char opt, const optionDef_slOptions *optionDefs ) {
+    const optionDef_slOptions *curDef = optionDefs;
     while( curDef->maxCount != 0 ) {
         if( curDef->shortOpt == opt )
             return curDef;
@@ -110,11 +113,11 @@ static const optionDef_slOptions* findByCharOption( char opt, const optionDef_sl
 // option is found, a pointer to it is returned - otherwise, NULL is returned.  Note that the string match ONLY matches
 // the first 'n' characters of the opt argument, where 'n' is the length of the long option in the definition.  This
 // means that opt arguments that include an optional or required option argument will still be matched.
-static const optionDef_slOptions* findByStringOption( char* opt, const optionDef_slOptions* optionDefs ) {
-    const optionDef_slOptions* curDef = optionDefs;
+static const optionDef_slOptions *findByStringOption( char *opt, const optionDef_slOptions *optionDefs ) {
+    const optionDef_slOptions *curDef = optionDefs;
     while( curDef->maxCount != 0 ) {
-        if( !strempty( curDef->longOpt ) ) {
-            if (0 == strncmp(opt, curDef->longOpt, strlen(curDef->longOpt)))
+        if( !strempty( curDef->longOpt )) {
+            if( 0 == strncmp( opt, curDef->longOpt, strlen( curDef->longOpt )))
                 return curDef;
         }
         curDef++;
@@ -125,123 +128,133 @@ static const optionDef_slOptions* findByStringOption( char* opt, const optionDef
 
 // Returns an error response with the given pattern and arguments resolved into a string.  Note that the errMsg value
 // in the response was allocated, and should be freed when no longer needed.
-static psloResponse errorMessageHelper( bool debug, const char* class, const char* pattern, ... ) {
+static slReturn errorMessageHelper( errorInfo_slReturn error, bool debug, const char *class, const char *pattern, ... ) {
 
     // first we resolve the pattern we were given...
     va_list args;
     va_start( args, pattern );
-    char* resolved;
+    char *resolved;
     vasprintf( &resolved, pattern, args );
     va_end( args );
 
     // then we insert that into our pattern...
-    char* errMsg;
-    asprintf( &errMsg, "Options %s error: %s.\n", class, resolved );
+    slReturn result = makeErrorFmtMsgReturn( error, "Options %s error: %s.", class, resolved );
     free( resolved );
-
-    if( debug ) printf( errMsg );
+    if( debug ) printf( "Options %s error: %s.\n", class, resolved );
 
     // return our bad news...
-    psloResponse response;
-    response.error = true;
-    response.errMsg = errMsg;
-    response.argc = 0;
-    response.argv = NULL;
-    return response;
+    return result;
 }
 
 
 // Prints a warning message.
-static void warningMessageHelper( const result_slOptions response, const char* class ) {
-    printf( "Options %s warning: %s.\n", class, response.msg );
+static void warningMessageHelper( slReturn response, const char *class ) {
+    printf( "Options %s warning: %s.\n", class, getReturnMsg( response ));
 }
 
 
 // If there is sufficient room, and if the maximum number of the given definition wouldn't be exceeed,
 // adds the given definition to the list of option definition records parsed.
-static psloResponse addOptionRecord( state_slOptions* state, const optionDef_slOptions* def ) {
+static slReturn addOptionRecord( state_slOptions *state, const optionDef_slOptions *def ) {
 
     // make sure we have room to record this one...
-    if( state->numOptionRecords >= MAX_SL_OPTIONS ) return errorMessageHelper( state->debug, "parsing", "exceeded maximum number of options (%d)", MAX_SL_OPTIONS);
+    if( state->numOptionRecords >= MAX_SL_OPTIONS )
+        return errorMessageHelper( ERRINFO( NULL ), state->debug, "parsing", "exceeded maximum number of options (%d)", MAX_SL_OPTIONS );
 
     // make sure this definition hasn't already been recorded the max number of times...
     int hits = 0;
     for( int i = 0; i < state->numOptionRecords; i++ )
         if( def == (state->optionRecords[i]).def )
             hits++;
-    if( hits >= def->maxCount ) return errorMessageHelper( state->debug, "parsing", "too many occurrences of option \"%s\": max is %d", getName_slOptions( def ), def->maxCount );
+    if( hits >= def->maxCount )
+        return errorMessageHelper( ERRINFO( NULL ), state->debug, "parsing", "too many occurrences of option \"%s\": max is %d",
+                                   getName_slOptions( def ), def->maxCount );
 
     // ok, all is well - record it...
     (state->optionRecords[state->numOptionRecords]).def = def;
     (state->optionRecords[state->numOptionRecords]).arg = NULL;
     state->numOptionRecords++;
-    psloResponse response = {0};
-    return response;
+
+    return makeOkReturn();
 }
 
 
 // Prints the given arguments.
-static void printArgs( int argc, char** args ) {
+static void printArgs( int argc, char **args ) {
     for( int i = 0; i < argc; i++ ) {
-        printf( "%s ", *(args + i) );
+        printf( "%s ", *(args + i));
     }
 }
 
 
 // Validate the given configuration, returning an error if any problems are found.
-static psloResponse validateConfig( const psloConfig* config ) {
+static slReturn validateConfig( const psloConfig *config ) {
 
     bool debug = (0 != (config->options & SL_OPTIONS_CONFIG_DEBUG));
 
     // make sure we've got an options definition array...
-    if( config->optionDefs == NULL ) return errorMessageHelper( debug, "validation", "no option definitions configured" );
+    if( config->optionDefs == NULL)
+        return errorMessageHelper( ERRINFO( NULL ), debug, "validation", "no option definitions configured" );
 
     // iterate over all the supplied definitions, making sure that all required arguments are present...
     int n = 0;
-    for( optionDef_slOptions* curDef = config->optionDefs; curDef->maxCount != 0; curDef++, n++ ) {
-        if( (curDef->longOpt == NULL) && (curDef->shortOpt == 0) )
-            return errorMessageHelper( debug, "validation", "option definition %d has neither a short form or a long form specified", n );
-        if( (curDef->shortOpt != 0) && !isprint( curDef->shortOpt ) )
-            return errorMessageHelper( debug, "validation", "option definition '%s' has an invalid short name with character code: %d", getName_slOptions( curDef ), curDef->shortOpt );
-        if( (curDef->longOpt != NULL) && (NULL != strchr( curDef->longOpt, '=' )) )
-            return errorMessageHelper( debug, "validation", "option definition '%s' contains an equal sign (\"=\"): '%s'", getName_slOptions( curDef ), curDef->longOpt );
-        if( (curDef->longOpt != NULL) && !issgraph( curDef->longOpt ) )
-            return errorMessageHelper( debug, "validation", "option definition '%s' has an invalid long name: '%s'", getName_slOptions( curDef ), curDef->longOpt );
-        if( (curDef->maxCount < 0) || (curDef->maxCount > MAX_SL_OPTIONS) )
-            return errorMessageHelper( debug, "validation", "option definition '%s' has a maxCount out of range %d", getName_slOptions( curDef ), curDef->maxCount );
-        if( strempty( curDef->helpMsg ) )
-            return errorMessageHelper( debug, "validation", "option definition '%'s has no help message specified", getName_slOptions( curDef ) );
-        if( (curDef->arg != argNone) && strempty( curDef->argName) )
-            return errorMessageHelper( debug, "validation", "option definition '%s' can have an argument, but has no argument name specified", getName_slOptions( curDef ) );
-        if( (curDef->shortOpt == ' ') && (curDef->arg != argNone) )
-            return errorMessageHelper( debug, "validation", "single-hyphen option cannot have an argument" );
-        if( (curDef->shortOpt == ' ') && !strempty( curDef->longOpt ) )
-            return errorMessageHelper( debug, "validation", "single-hyphen option cannot have a long name" );
+    for( optionDef_slOptions *curDef = config->optionDefs; curDef->maxCount != 0; curDef++, n++ ) {
+        if((curDef->longOpt == NULL) && (curDef->shortOpt == 0))
+            return errorMessageHelper( ERRINFO( NULL ), debug, "validation",
+                                       "option definition %d has neither a short form or a long form specified", n );
+        if((curDef->shortOpt != 0) && !isprint( curDef->shortOpt ))
+            return errorMessageHelper( ERRINFO( NULL ), debug, "validation",
+                                       "option definition '%s' has an invalid short name with character code: %d",
+                                       getName_slOptions( curDef ), curDef->shortOpt );
+        if((curDef->longOpt != NULL) && (NULL != strchr( curDef->longOpt, '=' )))
+            return errorMessageHelper( ERRINFO( NULL ), debug, "validation",
+                                       "option definition '%s' contains an equal sign (\"=\"): '%s'",
+                                       getName_slOptions( curDef ), curDef->longOpt );
+        if((curDef->longOpt != NULL) && !issgraph( curDef->longOpt ))
+            return errorMessageHelper( ERRINFO( NULL ), debug, "validation", "option definition '%s' has an invalid long name: '%s'",
+                                       getName_slOptions( curDef ), curDef->longOpt );
+        if((curDef->maxCount < 0) || (curDef->maxCount > MAX_SL_OPTIONS))
+            return errorMessageHelper( ERRINFO( NULL ), debug, "validation", "option definition '%s' has a maxCount out of range %d",
+                                       getName_slOptions( curDef ), curDef->maxCount );
+        if( strempty( curDef->helpMsg ))
+            return errorMessageHelper( ERRINFO( NULL ), debug, "validation", "option definition '%'s has no help message specified",
+                                       getName_slOptions( curDef ));
+        if((curDef->arg != argNone) && strempty( curDef->argName ))
+            return errorMessageHelper( ERRINFO( NULL ), debug, "validation",
+                                       "option definition '%s' can have an argument, but has no argument name specified",
+                                       getName_slOptions( curDef ));
+        if((curDef->shortOpt == ' ') && (curDef->arg != argNone))
+            return errorMessageHelper( ERRINFO( NULL ), debug, "validation", "single-hyphen option cannot have an argument" );
+        if((curDef->shortOpt == ' ') && !strempty( curDef->longOpt ))
+            return errorMessageHelper( ERRINFO( NULL ), debug, "validation", "single-hyphen option cannot have a long name" );
 
         // iterate over the supplied definitions again to make sure we don't have a duplicate short or long name...
-        for( optionDef_slOptions* chkDef = config->optionDefs; chkDef->maxCount != 0; chkDef++ ) {
+        for( optionDef_slOptions *chkDef = config->optionDefs; chkDef->maxCount != 0; chkDef++ ) {
             if( chkDef != curDef ) {
-                if( (curDef->shortOpt != 0) && (curDef->shortOpt == chkDef->shortOpt) )
-                    return errorMessageHelper( debug, "validation", "two option definitions have the same short name: %c", curDef->shortOpt );
-                if( (curDef->longOpt != NULL) && (chkDef->longOpt != NULL ) && (strcmp( curDef->longOpt, chkDef->longOpt ) == 0) )
-                    return errorMessageHelper( debug, "validation", "two option definitions have the same long name: %s", curDef->longOpt );
+                if((curDef->shortOpt != 0) && (curDef->shortOpt == chkDef->shortOpt))
+                    return errorMessageHelper( ERRINFO( NULL ), debug, "validation",
+                                               "two option definitions have the same short name: %c",
+                                               curDef->shortOpt );
+                if((curDef->longOpt != NULL) && (chkDef->longOpt != NULL) &&
+                   (strcmp( curDef->longOpt, chkDef->longOpt ) == 0))
+                    return errorMessageHelper( ERRINFO( NULL ), debug, "validation",
+                                               "two option definitions have the same long name: %s", curDef->longOpt );
             }
         }
     }
 
-    psloResponse okResponse = {0};
-    return okResponse;
+    return makeOkReturn();
 }
 
 
 typedef struct {
-    const optionDef_slOptions* curDef;
+    const optionDef_slOptions *curDef;
     int curRec;
 } optRecIteratorState;
 
 
 // Initializes the iterator state.
-static void optRecIteratorInit( optRecIteratorState* state, const optionDef_slOptions* optionDefs ) {
+static void optRecIteratorInit( optRecIteratorState *state, const optionDef_slOptions *optionDefs ) {
     state->curDef = optionDefs;
     state->curRec = 0;
 }
@@ -254,13 +267,13 @@ static void optRecIteratorInit( optRecIteratorState* state, const optionDef_slOp
 // option definition is then returned.  This means that procOptionRecords are returned in the same order that the
 // definitions were supplied in, and there will be multiple records with the same option definition returned IF the
 // user specified more than one AND multiple instances of that particular option are allowed.
-static const procOptionRecord* optRecIterator( optRecIteratorState* itState, const state_slOptions* state ) {
+static const procOptionRecord *optRecIterator( optRecIteratorState *itState, const state_slOptions *state ) {
 
     // iterate over all the option definitions looking for those with parsing functions, then for each of those
     // iterate over the parsed option records those with the same definition, then calling the parsing function for each
     for( ; itState->curDef->maxCount != 0; itState->curDef++ ) {
-        for ( ; itState->curRec < state->numOptionRecords; itState->curRec++) {
-            const procOptionRecord* rec = &state->optionRecords[itState->curRec];
+        for( ; itState->curRec < state->numOptionRecords; itState->curRec++ ) {
+            const procOptionRecord *rec = &state->optionRecords[itState->curRec];
             if( itState->curDef == rec->def ) {
                 itState->curRec++;
                 return rec;
@@ -273,41 +286,44 @@ static const procOptionRecord* optRecIterator( optRecIteratorState* itState, con
 
 
 // Print a help message.
-static result_slOptions helpAction( const optionDef_slOptions* defs, const psloConfig* config ) {
+static slReturn helpAction( const optionDef_slOptions *defs, const psloConfig *config ) {
 
     // print a nice header...
     printf( "Help with %s options:\n\n", config->name );
 
     // iterate over all the option definitions to find out how wide the widest name/argument is..
     int maxWidth = 0;
-    for( const optionDef_slOptions* curDef = defs; curDef->maxCount != 0; curDef++ ) {
+    for( const optionDef_slOptions *curDef = defs; curDef->maxCount != 0; curDef++ ) {
         int thisWidth = 0;
         if( curDef->shortOpt != 0 ) thisWidth += 2;  // allow for '-' plus the short name...
-        if( !strempty( curDef->longOpt ) ) thisWidth += 2 + strlen( curDef->longOpt );  // allow for '--' plus the long name...
-        if( (curDef->shortOpt != 0) && (!strempty( curDef->longOpt )) ) thisWidth += 2;  // allow for the ', ' between short and long name...
-        if( curDef->arg != argNone ) thisWidth += 3 + strlen( curDef->argName);  // allow for space and surrounding [] or <>...
+        if( !strempty( curDef->longOpt ))
+            thisWidth += 2 + strlen( curDef->longOpt );  // allow for '--' plus the long name...
+        if((curDef->shortOpt != 0) && (!strempty( curDef->longOpt )))
+            thisWidth += 2;  // allow for the ', ' between short and long name...
+        if( curDef->arg != argNone )
+            thisWidth += 3 + strlen( curDef->argName );  // allow for space and surrounding [] or <>...
         if( thisWidth > maxWidth ) maxWidth = thisWidth;
     }
 
     // iterate over all the option definitions again, this time to actually print the help...
     bool gotReqArg = false;
     bool gotOptArg = false;
-    for( const optionDef_slOptions* curDef = defs; curDef->maxCount != 0; curDef++ ) {
+    for( const optionDef_slOptions *curDef = defs; curDef->maxCount != 0; curDef++ ) {
 
         // first we make our format string...
-        char* format;
+        char *format;
         asprintf( &format, "  %%-%ds %%s%%s\n", maxWidth + 2 );
 
         // now we make the name/argument string pieces...
-        char* name = getName_slOptions( curDef );
-        char* namearg;
+        char *name = getName_slOptions( curDef );
+        char *namearg;
         if( curDef->arg == argNone )
             namearg = concat( name, "" );
         else {
-            char* lb = (curDef->arg == argRequired) ? " <" : "[=";
-            char* rb = (curDef->arg == argRequired) ? ">" : "]";
-            char* x1 = concat( lb, curDef->argName );
-            char* x2 = concat( x1, rb );
+            char *lb = (curDef->arg == argRequired) ? " <" : "[=";
+            char *rb = (curDef->arg == argRequired) ? ">" : "]";
+            char *x1 = concat( lb, curDef->argName );
+            char *x2 = concat( x1, rb );
             namearg = concat( name, x2 );
             free( x1 );
             free( x2 );
@@ -316,7 +332,7 @@ static result_slOptions helpAction( const optionDef_slOptions* defs, const psloC
         if( curDef->arg == argOptional ) gotOptArg = true;
 
         // now we determine the suffix (for options that can be repeated n times)...
-        char* repeat;
+        char *repeat;
         if( curDef->maxCount == 1 )
             repeat = "";
         else {
@@ -335,33 +351,31 @@ static result_slOptions helpAction( const optionDef_slOptions* defs, const psloC
     if( gotOptArg ) printf( "Arguments in [square brackets] are optional; they may be omitted.\n" );
 
     // if we were given additional info text, print it...
-    if( config->addedInfo != NULL ) {
+    if( config->addedInfo != NULL) {
         printf( "\n" );
         printf( config->addedInfo );
     }
 
-    result_slOptions result = {resultOk};
-    return result;
+    return makeOkReturn();
 }
 
 
 // Print a version message.
-static result_slOptions versionAction( const optionDef_slOptions* defs, const psloConfig* config ) {
+static slReturn versionAction( const optionDef_slOptions *defs, const psloConfig *config ) {
     printf( "%s version %s\n", config->name, config->version );
-    result_slOptions result = {resultOk};
-    return result;
+    return makeOkReturn();
 }
 
 
 // Append string to an existing string.
-static void accum_append( char** existing, char* append ) {
-    if( *existing == NULL ) {
-        *existing = safeMalloc( 1 + strlen( append ) );
+static void accum_append( char **existing, char *append ) {
+    if( *existing == NULL) {
+        *existing = safeMalloc( 1 + strlen( append ));
         strcpy( *existing, append );
         return;
     }
     size_t existingLen = strlen( *existing );
-    char* result = safeMalloc( 1 + existingLen + strlen( append ) );
+    char *result = safeMalloc( 1 + existingLen + strlen( append ));
     strcpy( result, *existing );
     strcpy( result + existingLen, append );
     free( *existing );
@@ -370,40 +384,38 @@ static void accum_append( char** existing, char* append ) {
 
 
 // Append character to existing string.
-static void accum_append_char( char** existing, char append ) {
-    char onechar[2] = { append, 0 };
+static void accum_append_char( char **existing, char append ) {
+    char onechar[2] = {append, 0};
     accum_append( existing, onechar );
 }
 
 
 // Print a usage message.
-static result_slOptions usageAction( const optionDef_slOptions* defs, const psloConfig* config ) {
+static slReturn usageAction( const optionDef_slOptions *defs, const psloConfig *config ) {
 
     // where we're going to accumulate information...
-    char* shortNoArg = NULL;
-    char* shortArg   = NULL;
-    char* longNoArg  = NULL;
-    char* longArg    = NULL;
+    char *shortNoArg = NULL;
+    char *shortArg = NULL;
+    char *longNoArg = NULL;
+    char *longArg = NULL;
 
     // iterate over all our option definitions, collecting usage information...
-    for( const optionDef_slOptions* curDef = defs; curDef->maxCount != 0; curDef++ ) {
+    for( const optionDef_slOptions *curDef = defs; curDef->maxCount != 0; curDef++ ) {
 
         // if we have a short name defined, include it...
         if( curDef->shortOpt != 0 ) {
             if( curDef->arg == argNone ) {
-                if( shortNoArg == NULL ) accum_append( &shortNoArg, "-" );
+                if( shortNoArg == NULL) accum_append( &shortNoArg, "-" );
                 accum_append_char( &shortNoArg, curDef->shortOpt );
-            }
-            else {
-                if( shortArg != NULL ) accum_append( &shortArg, " " );
+            } else {
+                if( shortArg != NULL) accum_append( &shortArg, " " );
                 accum_append_char( &shortArg, '-' );
                 accum_append_char( &shortArg, curDef->shortOpt );
                 if( curDef->arg == argRequired ) {
                     accum_append( &shortArg, " <" );
                     accum_append( &shortArg, curDef->argName );
                     accum_append_char( &shortArg, '>' );
-                }
-                else {
+                } else {
                     accum_append( &shortArg, "[=" );
                     accum_append( &shortArg, curDef->argName );
                     accum_append_char( &shortArg, ']' );
@@ -412,22 +424,20 @@ static result_slOptions usageAction( const optionDef_slOptions* defs, const pslo
         }
 
         // if we have a long name defined, include it...
-        if( !strempty( curDef->longOpt ) ) {
+        if( !strempty( curDef->longOpt )) {
             if( curDef->arg == argNone ) {
-                if( !strempty( longNoArg ) ) accum_append( &longNoArg, " " );
+                if( !strempty( longNoArg )) accum_append( &longNoArg, " " );
                 accum_append( &longNoArg, "--" );
                 accum_append( &longNoArg, curDef->longOpt );
-            }
-            else {
-                if( longArg != NULL ) accum_append( &longArg, " " );
+            } else {
+                if( longArg != NULL) accum_append( &longArg, " " );
                 accum_append( &longArg, "--" );
                 accum_append( &longArg, curDef->longOpt );
                 if( curDef->arg == argRequired ) {
                     accum_append( &longArg, " <" );
                     accum_append( &longArg, curDef->argName );
                     accum_append( &longArg, ">" );
-                }
-                else {
+                } else {
                     accum_append( &longArg, "[=" );
                     accum_append( &longArg, curDef->argName );
                     accum_append( &longArg, "]" );
@@ -442,13 +452,12 @@ static result_slOptions usageAction( const optionDef_slOptions* defs, const pslo
     printf( "  With long options: %s %s %s\n", config->name, longNoArg, longArg );
 
     // free up any memory we used...
-    if( shortArg   != NULL ) free( shortArg   );
-    if( shortNoArg != NULL ) free( shortNoArg );
-    if( longArg    != NULL ) free( longArg    );
-    if( longNoArg  != NULL ) free( longNoArg  );
+    if( shortArg != NULL) free( shortArg );
+    if( shortNoArg != NULL) free( shortNoArg );
+    if( longArg != NULL) free( longArg );
+    if( longNoArg != NULL) free( longNoArg );
 
-    result_slOptions result = {resultOk};
-    return result;
+    return makeOkReturn();
 }
 
 
@@ -481,40 +490,40 @@ static optionDef_slOptions usageOptDef = {
 };
 
 
-static void checkOptionalDefEntry( optionDef_slOptions** optDefs, int* count, int mask, optionDef_slOptions* def, const psloConfig* config ) {
+static void checkOptionalDefEntry( optionDef_slOptions **optDefs, int *count, int mask, optionDef_slOptions *def,
+                                   const psloConfig *config ) {
 
     // if it isn't enabled, do nothing...
-    if( (config->options & mask) == 0 ) return;
+    if((config->options & mask) == 0 ) return;
 
     // see if the client defined anything conflicting,and if so, suppress our def...
-    if( (def->shortOpt != 0) && findByCharOption( def->shortOpt, config->optionDefs ) )
+    if((def->shortOpt != 0) && findByCharOption( def->shortOpt, config->optionDefs ))
         def->shortOpt = 0;
-    if( (def->longOpt != NULL) && findByStringOption( def->longOpt, config->optionDefs ) )
+    if((def->longOpt != NULL) && findByStringOption( def->longOpt, config->optionDefs ))
         def->longOpt = NULL;
 
     // if we have any names still defined, add this option def...
-    if( (def->longOpt != NULL) || (def->shortOpt != 0) ) {
+    if((def->longOpt != NULL) || (def->shortOpt != 0)) {
         (*optDefs)[*count] = *def;
         (*count)++;
     }
 }
 
 
-
-static const optionDef_slOptions* ensureOptDefs( const psloConfig* config ) {
+static const optionDef_slOptions *ensureOptDefs( const psloConfig *config ) {
 
     // how many client-defined option definitions are there?
     int numOptDefs;
     for( numOptDefs = 0; config->optionDefs[numOptDefs].maxCount != 0; numOptDefs++ );
 
     // allocate enough memory to hold all the client-defined options, plus up to three more, and our terminator...
-    optionDef_slOptions* result = safeMalloc( sizeof( optionDef_slOptions ) * (4 + numOptDefs) );
+    optionDef_slOptions *result = safeMalloc( sizeof( optionDef_slOptions ) * (4 + numOptDefs));
     numOptDefs = 0;  // start building our result at the beginning...
 
     // if we should, add our automatic entries...
     checkOptionalDefEntry( &result, &numOptDefs, SL_OPTIONS_CONFIG_ADD_VERSION, &versionOptDef, config );
-    checkOptionalDefEntry( &result, &numOptDefs, SL_OPTIONS_CONFIG_ADD_USAGE,   &usageOptDef,   config );
-    checkOptionalDefEntry( &result, &numOptDefs, SL_OPTIONS_CONFIG_ADD_HELP,    &helpOptDef,    config );
+    checkOptionalDefEntry( &result, &numOptDefs, SL_OPTIONS_CONFIG_ADD_USAGE, &usageOptDef, config );
+    checkOptionalDefEntry( &result, &numOptDefs, SL_OPTIONS_CONFIG_ADD_HELP, &helpOptDef, config );
 
     // now copy the client-defined option definitions...
     for( int i = 0; config->optionDefs[i].maxCount != 0; i++, numOptDefs++ )
@@ -532,23 +541,25 @@ static const optionDef_slOptions* ensureOptDefs( const psloConfig* config ) {
 #define REM_ARGS      (state->remainingArgs)
 #define CUR_ARG_INDEX (state->currentArgIndex)
 #define DEBUG         (state->debug)
-static psloResponse parsePhase( int argc, const psloConfig* config, state_slOptions* state ) {
+
+static slReturn parsePhase( int argc, const psloConfig *config, state_slOptions *state ) {
 
     // in the options processing phase, we need to read each argument once (unless we get stopped by something)...
     while( REM_ARGS > 0 ) {
 
-        if( DEBUG ) printf( "Parsing argument %d (\"%s\")\n", CUR_ARG_INDEX, CUR_ARG );
+        if( DEBUG) printf( "Parsing argument %d (\"%s\")\n", CUR_ARG_INDEX, CUR_ARG);
 
         // if we're expecting an argument for a previously processed option, handle it...
-        if( (state->numOptionRecords > 0) && (LAST_OPT_REC.def->arg == argRequired) && (LAST_OPT_REC.arg == NULL) ) {
-            if( DEBUG ) printf( "Assigning argument \"%s\" to option \"%s\"\n", CUR_ARG, getName_slOptions( LAST_OPT_REC.def ) );
+        if((state->numOptionRecords > 0) && (LAST_OPT_REC.def->arg == argRequired) && (LAST_OPT_REC.arg == NULL)) {
+            if( DEBUG)
+                printf( "Assigning argument \"%s\" to option \"%s\"\n", CUR_ARG, getName_slOptions(LAST_OPT_REC.def ));
             LAST_OPT_REC.arg = CUR_ARG;
             CUR_ARG_INDEX++;
             REM_ARGS--;
         }
 
-        // if this argument is a standalone "--?", and it's the first argument, then we're turning on debug tracing...
-        else if( (CUR_ARG_INDEX == 1) && (0 == strcmp( "--?", CUR_ARG )) ) {
+            // if this argument is a standalone "--?", and it's the first argument, then we're turning on debug tracing...
+        else if((CUR_ARG_INDEX == 1) && (0 == strcmp( "--?", CUR_ARG))) {
             DEBUG = true;
             printf( "Debug tracing turned on by --? option\n" );
             REM_ARGS--;
@@ -556,36 +567,36 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
         }
 
             // if this argument is a standalone "--", stop our option processing here...
-        else if( 0 == strcmp( "--", CUR_ARG ) ) {
+        else if( 0 == strcmp( "--", CUR_ARG)) {
             REM_ARGS = 0;
             CUR_ARG_INDEX++;
         }
 
-        // if this argument starts with a '-', handle it...
+            // if this argument starts with a '-', handle it...
         else if( *CUR_ARG == '-' ) {
 
             // how much argument do we have??
-            size_t curArgLen = strlen( CUR_ARG );
+            size_t curArgLen = strlen(CUR_ARG);
 
             // if the second character is ALSO a "-", the we've got a long option, so handle that...
-            if( (curArgLen > 2) && (*(CUR_ARG + 1) == '-') ) {
+            if((curArgLen > 2) && (*(CUR_ARG + 1) == '-')) {
 
-                char* curOpt = CUR_ARG + 2;  // point to the start of the long option...
+                char *curOpt = CUR_ARG + 2;  // point to the start of the long option...
 
                 // try to find this option in our option definitions...
-                const optionDef_slOptions* def = findByStringOption( curOpt, state->optDefs );
+                const optionDef_slOptions *def = findByStringOption( curOpt, state->optDefs );
 
                 // if we found it, process it...
-                if( def != NULL ) {
+                if( def != NULL) {
 
-                    if( DEBUG ) printf( "Found long option: %s\n", curOpt );
+                    if( DEBUG) printf( "Found long option: %s\n", curOpt );
 
                     // first we add the option record...
-                    psloResponse response = addOptionRecord( state, def );
-                    if( response.error ) return response;
+                    slReturn response = addOptionRecord( state, def );
+                    if( isErrorReturn( response ) ) return response;
 
                     // if we have a suffix (which might be an option argument), handle that...
-                    if( strlen( curOpt ) > strlen( def->longOpt ) ) {
+                    if( strlen( curOpt ) > strlen( def->longOpt )) {
                         curOpt += strlen( def->longOpt );  // move to the beginning of the suffix...
 
                         // if we have an equals sign, then the rest of the suffix is the argument...
@@ -594,68 +605,74 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
                             // if the option is allowed to have an argument, assign it...
                             if( def->arg != argNone ) {
                                 LAST_OPT_REC.arg = ++curOpt;
-                                if( DEBUG ) printf( "Assigning argument \"%s\" to \"%s\" option\n", curOpt, LAST_OPT_REC.def->longOpt );
-                            }
-                            else
-                                return errorMessageHelper( DEBUG, "parsing", "unexpected argument (\"%s\") for long option (\"%s\")", ++curOpt, def->longOpt );
+                                if( DEBUG)
+                                    printf( "Assigning argument \"%s\" to \"%s\" option\n", curOpt,
+                                            LAST_OPT_REC.def->longOpt );
+                            } else
+                                return errorMessageHelper(ERRINFO( NULL ), DEBUG, "parsing",
+                                                          "unexpected argument (\"%s\") for long option (\"%s\")",
+                                                          ++curOpt, def->longOpt );
                         }
 
-                        // otherwise, we've got something that makes no sense...
-                        else return errorMessageHelper( DEBUG, "parsing", "invalid option argument (possibly missing the \"=\"): \"%s\"", curOpt );
+                            // otherwise, we've got something that makes no sense...
+                        else
+                            return errorMessageHelper(ERRINFO( NULL ), DEBUG, "parsing",
+                                                      "invalid option argument (possibly missing the \"=\"): \"%s\"",
+                                                      curOpt );
                     }
-                }
-                else
-                    return errorMessageHelper( DEBUG, "parsing", "unrecognized long option (\"%s\") in argument %d", curOpt, CUR_ARG_INDEX );
+                } else
+                    return errorMessageHelper(ERRINFO( NULL ), DEBUG, "parsing", "unrecognized long option (\"%s\") in argument %d",
+                                              curOpt, CUR_ARG_INDEX);
             }
 
-            // otherwise, we have one or more one-character options - process them one-by-one...
+                // otherwise, we have one or more one-character options - process them one-by-one...
             else {
 
                 // if we've got the special case of "-"...
                 if( curArgLen == 1 ) {
 
                     // try to find this option in our option definitions...
-                    const optionDef_slOptions *def = findByCharOption( ' ', state->optDefs);
+                    const optionDef_slOptions *def = findByCharOption( ' ', state->optDefs );
 
                     // if we found it, then process it...
-                    if (def != NULL) {
-                        if (DEBUG) printf( "Found single-hyphen option: '-'\n" );
-                        psloResponse response = addOptionRecord(state, def);
-                        if (response.error) return response;
-                    }
-                    else
-                        return errorMessageHelper(DEBUG, "parsing", "unrecognized single-hyphen option (\"-\") in argument %d", CUR_ARG_INDEX);
-                }
-                else {
+                    if( def != NULL) {
+                        if( DEBUG) printf( "Found single-hyphen option: '-'\n" );
+                        slReturn response = addOptionRecord( state, def );
+                        if( isErrorReturn( response ) ) return response;
+                    } else
+                        return errorMessageHelper(ERRINFO( NULL ), DEBUG, "parsing",
+                                                  "unrecognized single-hyphen option (\"-\") in argument %d",
+                                                  CUR_ARG_INDEX);
+                } else {
                     char *curOpt = CUR_ARG + 1;
-                    while (*curOpt != 0) {
+                    while( *curOpt != 0 ) {
 
                         // try to find this option in our option definitions...
-                        const optionDef_slOptions *def = findByCharOption(*curOpt, state->optDefs);
+                        const optionDef_slOptions *def = findByCharOption( *curOpt, state->optDefs );
 
                         // if we found it, then process it...
-                        if (def != NULL) {
-                            if (DEBUG) printf( "Found single-character option: '%c'\n", def->shortOpt );
-                            psloResponse response = addOptionRecord(state, def);
-                            if (response.error) return response;
+                        if( def != NULL) {
+                            if( DEBUG) printf( "Found single-character option: '%c'\n", def->shortOpt );
+                            slReturn response = addOptionRecord( state, def );
+                            if( isErrorReturn( response ) ) return response;
 
                             // if we have optional or required arguments, handle that...
                             bool haveMore = (*(curOpt + 1) != 0);  // true if the terminator isn't the next character...
-                            if ((def->arg != argNone) && haveMore) {
+                            if( (def->arg != argNone) && haveMore ) {
                                 curOpt++;  // get past our option letter...
-                                if (*curOpt == '=') curOpt++;  // move past the equals sign, if there is one...
+                                if( *curOpt == '=' ) curOpt++;  // move past the equals sign, if there is one...
                                 LAST_OPT_REC.arg = curOpt;
-                                if (DEBUG)
-                                    printf("Assigning argument \"%s\" to \"%c\" option\n", curOpt,
-                                           LAST_OPT_REC.def->shortOpt);
-                                curOpt += strlen(curOpt);  // move to the null terminator...
+                                if( DEBUG)
+                                    printf( "Assigning argument \"%s\" to \"%c\" option\n", curOpt,
+                                            LAST_OPT_REC.def->shortOpt );
+                                curOpt += strlen( curOpt );  // move to the null terminator...
                             } else
                                 curOpt++;  // move to the next character in the argument...
                         }
 
                             // otherwise, someone fed us an option we don't know about...
                         else
-                            return errorMessageHelper(DEBUG, "parsing",
+                            return errorMessageHelper(ERRINFO( NULL ), DEBUG, "parsing",
                                                       "unrecognized single character option (\"%c\") in argument %d",
                                                       *curOpt, CUR_ARG_INDEX);
                     }
@@ -665,29 +682,37 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
             REM_ARGS--;
         }
 
-        // otherwise, we have no idea what this is, so handle THAT...
+            // otherwise, we have no idea what this is, so handle THAT...
         else {
 
             // if we're in strict mode, we're done...
-            if( config->options & SL_OPTIONS_CONFIG_STRICT ) {
-                if( DEBUG ) printf( "Unidentified argument in strict mode; halting option processing\n" );
+            if( config->options & SL_OPTIONS_CONFIG_STRICT) {
+                if( DEBUG) printf( "Unidentified argument in strict mode; halting option processing\n" );
                 REM_ARGS = 0;
             }
 
-            // otherwise, it's time to permute...
+                // otherwise, it's time to permute...
             else {
 
-                if( DEBUG ) printf( "Command line argument not recognized as either an option or an option argument\n" );
+                if( DEBUG) printf( "Command line argument not recognized as either an option or an option argument\n" );
 
                 // we only need to do this if there are at least two arguments remaining...
-                if( (1 + argc - CUR_ARG_INDEX) >= 2 ) {
-                    if( DEBUG ) { printf( "Before permuting: " ); printArgs( argc, state->ourArgv ); printf( "\n" ); }
-                    char* thisArg = *(state->ourArgv + CUR_ARG_INDEX);
+                if((1 + argc - CUR_ARG_INDEX) >= 2 ) {
+                    if( DEBUG) {
+                        printf( "Before permuting: " );
+                        printArgs( argc, state->ourArgv );
+                        printf( "\n" );
+                    }
+                    char *thisArg = *(state->ourArgv + CUR_ARG_INDEX);
                     for( int i = CUR_ARG_INDEX + 1; i < argc; i++ ) {
                         *(state->ourArgv + i - 1) = *(state->ourArgv + i);
                     }
                     *(state->ourArgv + argc - 1) = thisArg;
-                    if( DEBUG ) { printf( " After permuting: " ); printArgs( argc, state->ourArgv ); printf( "\n" ); }
+                    if( DEBUG) {
+                        printf( " After permuting: " );
+                        printArgs( argc, state->ourArgv );
+                        printf( "\n" );
+                    }
                 }
                 REM_ARGS--;
             }
@@ -695,13 +720,17 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
     }
 
     // make sure the last option has an argument, if it requires one...
-    if( (LAST_OPT_REC.def->arg == argRequired) && (LAST_OPT_REC.arg == NULL) )
-        return errorMessageHelper( DEBUG, "parsing", "option [%s] missing required argument", getName_slOptions( LAST_OPT_REC.def ) );
+    if((LAST_OPT_REC.def->arg == argRequired) && (LAST_OPT_REC.arg == NULL))
+        return errorMessageHelper(ERRINFO( NULL ), DEBUG, "parsing", "option [%s] missing required argument",
+                                  getName_slOptions(LAST_OPT_REC.def ));
 
     // return with an error-free response...
-    psloResponse response = { argc - CUR_ARG_INDEX, false, NULL, &CUR_ARG };
-    return response;
+    args_slOptions *args = safeMalloc( sizeof( args_slOptions ));
+    args->argc = argc - CUR_ARG_INDEX;
+    args->argv = &CUR_ARG;
+    return makeOkInfoReturn( args );
 }
+
 #undef DEBUG
 #undef REM_ARGS
 #undef CUR_ARG_INDEX
@@ -712,26 +741,26 @@ static psloResponse parsePhase( int argc, const psloConfig* config, state_slOpti
 #define CUR_ARG (*(state.ourArgv + state.currentArgIndex))   //(*(state.ourArgv) + state.currentArgIndex)
 #define LAST_OPT_REC (state.optionRecords[state.numOptionRecords - 1])
 #define DEBUG (state.debug)
-#define EH( result, class )                                      \
-    if ((result).type == resultError) {                          \
-        free( (void*) state.optDefs );                           \
-        return errorMessageHelper( DEBUG, class, (result).msg ); \
-    } else if ((result).type == resultWarning) {                 \
-        warningMessageHelper( result, class );                   \
+#define EH( result, class )                                                                     \
+    if ( isErrorReturn( result )) {                                                             \
+        free( (void*) state.optDefs );                                                          \
+        return errorMessageHelper( ERRINFO( result ), DEBUG, class, "fatal error" );            \
+    } else if( isWarningReturn( result )) {                                                     \
+        warningMessageHelper( result, class );                                                  \
     }
 
-extern psloResponse process_slOptions( int argc, const char *argv[], const psloConfig* config ) {
+extern slReturn process_slOptions( int argc, const char *argv[], const psloConfig *config ) {
 
     // validate the client's supplied configuration, to the extent we can...
-    if( config->options & SL_OPTIONS_CONFIG_DEBUG ) printf( "Validating client-supplied configuration\n" );
-    psloResponse response = validateConfig( config );
-    if( response.error ) return response;
+    if( config->options & SL_OPTIONS_CONFIG_DEBUG) printf( "Validating client-supplied configuration\n" );
+    slReturn response = validateConfig( config );
+    if( isErrorReturn( response )) return response;
 
     // get copy of our option definitions, possibly enhanced...
-    const optionDef_slOptions* optDefs = ensureOptDefs( config );
+    const optionDef_slOptions *optDefs = ensureOptDefs( config );
 
     // make a local (and mutable) copy of the original argv...
-    char* argv_copy[argc];
+    char *argv_copy[argc];
     for( int i = 0; i < argc; i++ ) argv_copy[i] = (char *) argv[i];
 
     // initialize our state...
@@ -741,68 +770,75 @@ extern psloResponse process_slOptions( int argc, const char *argv[], const psloC
     state.remainingArgs = argc - 1;     // the number of arguments we haven't yet processed...
     state.currentArgIndex = 1;          // the index of the argument we're currently working on...
     state.numOptionRecords = 0;         // of course we haven't parsed any yet...
-    state.ourArgv = (char**)&argv_copy; // a copy of argv that we can modify...
+    state.ourArgv = (char **) &argv_copy; // a copy of argv that we can modify...
     state.debug = haveDebug;            // if the caller asked for debug, he's got it...
 
     // parse our options, and bail if we got an error...
-    if( DEBUG ) printf( "Starting command line option parsing phase\n" );
+    if( DEBUG) printf( "Starting command line option parsing phase\n" );
     response = parsePhase( argc, config, &state );
-    if( response.error ) { free( (void*) state.optDefs ); return response; }
+    if( isErrorReturn( response )) {
+        free((void *) state.optDefs );
+        return response;
+    }
+
+    // save the results of the parse phase for return when we're finished (if successful)...
+    args_slOptions *args = getReturnInfo( response );
 
     // when we get here, response.argc is the count of unprocessed arguments pointed to by response.argv...
-    if( DEBUG ) printf( "Starting individual option parsing phase\n" );
+    if( DEBUG) printf( "Starting individual option parsing phase\n" );
     optRecIteratorState itState;
     optRecIteratorInit( &itState, state.optDefs );
-    const procOptionRecord* rec;
-    while( (rec = optRecIterator( &itState, &state )) != NULL ) {
+    const procOptionRecord *rec;
+    while((rec = optRecIterator( &itState, &state )) != NULL) {
 
         // if we have a parse function, call it...
         if( rec->def->parse ) {
-            result_slOptions result = rec->def->parse( rec->def->parsePtr, rec->def->parseInt, rec->def, rec->arg, config->clientData );
+            slReturn result = rec->def->parse( rec->def->parsePtr, rec->def->parseInt, rec->def, rec->arg,
+                                               config->clientData );
             EH( result, "parsing" )
         }
     }
 
-    if( DEBUG ) printf( "Starting individual option constraint phase\n" );
+    if( DEBUG) printf( "Starting individual option constraint phase\n" );
     if( config->beforeConstraint ) {
-        result_slOptions cr = config->beforeConstraint( state.optDefs, config, &state );
+        slReturn cr = config->beforeConstraint( state.optDefs, config, &state );
         EH( cr, "constraint" )
     }
     optRecIteratorInit( &itState, state.optDefs );
-    while( (rec = optRecIterator( &itState, &state )) != NULL ) {
+    while((rec = optRecIterator( &itState, &state )) != NULL) {
 
         // if we have a constraint-checking function, call it...
         if( rec->def->cnstr ) {
-            result_slOptions result = rec->def->cnstr( state.optDefs, config, &state );
+            slReturn result = rec->def->cnstr( state.optDefs, config, &state );
             EH( result, "constraint" )
         }
     }
     if( config->afterConstraint ) {
-        result_slOptions cr = config->afterConstraint( state.optDefs, config, &state );
+        slReturn cr = config->afterConstraint( state.optDefs, config, &state );
         EH( cr, "constraint" )
     }
 
-    if( DEBUG ) printf( "Starting individual option action phase\n" );
+    if( DEBUG) printf( "Starting individual option action phase\n" );
     if( config->beforeAction ) {
-        result_slOptions ar = config->beforeAction( state.optDefs, config );
+        slReturn ar = config->beforeAction( state.optDefs, config );
         EH( ar, "action" )
     }
     optRecIteratorInit( &itState, state.optDefs );
-    while( (rec = optRecIterator( &itState, &state )) != NULL ) {
+    while((rec = optRecIterator( &itState, &state )) != NULL) {
 
         // if we have an action function, call it...
         if( rec->def->action ) {
-            result_slOptions result = rec->def->action( state.optDefs, config );
+            slReturn result = rec->def->action( state.optDefs, config );
             EH( result, "action" )
         }
     }
     if( config->afterAction ) {
-        result_slOptions ar = config->afterAction( state.optDefs, config );
+        slReturn ar = config->afterAction( state.optDefs, config );
         EH( ar, "action" )
     }
 
-    free( (void*) state.optDefs );
-    return response;
+    free((void *) state.optDefs );
+    return makeOkInfoReturn( args );
 }
 
 #undef DEBUG
