@@ -107,10 +107,10 @@ extern void put_uint32_slBuffer( slBuffer *buffer, size_t offset, uint32_t value
         b[offset  ] = (byte) (value >> 24);
     }
     else {
-        b[offset  ] = (byte) (value >> 24);
+        b[offset++] = (byte) (value >> 24);
         b[offset++] = (byte) (value >> 16);
         b[offset++] = (byte) (value >> 8 );
-        b[offset++] = (byte)  value;
+        b[offset  ] = (byte)  value;
     }
 }
 
@@ -155,11 +155,11 @@ extern void put_uint16_slBuffer( slBuffer *buffer, size_t offset, uint16_t value
     byte* b = buffer->buffer;
     if( buffer->endiness == LittleEndian ) {
         b[offset++] = (byte)  value;
-        b[offset++] = (byte) (value >> 8 );
+        b[offset  ] = (byte) (value >> 8 );
     }
     else {
         b[offset++] = (byte) (value >> 8 );
-        b[offset++] = (byte)  value;
+        b[offset  ] = (byte)  value;
     }
 }
 
@@ -174,7 +174,7 @@ extern uint16_t get_uint16_slBuffer( slBuffer *buffer, size_t offset ) {
     byte *b = buffer->buffer;
     return (buffer->endiness == LittleEndian) ?
            b[offset]        | (b[offset + 1] <<  8) | (b[offset + 2] << 16) | (b[offset + 3] << 24 ) :
-           (b[offset] << 24) | (b[offset + 1] << 16) | (b[offset + 2] <<  8) |  b[offset + 3]       ;
+          (b[offset] << 24) | (b[offset + 1] << 16) | (b[offset + 2] <<  8) |  b[offset + 3]       ;
 }
 
 
@@ -204,11 +204,11 @@ extern void put_uint8_slBuffer( slBuffer *buffer, size_t offset, uint8_t value )
     byte* b = buffer->buffer;
     if( buffer->endiness == LittleEndian ) {
         b[offset++] = (byte)  value;
-        b[offset++] = (byte) (value >> 8 );
+        b[offset  ] = (byte) (value >> 8 );
     }
     else {
         b[offset++] = (byte) (value >> 8 );
-        b[offset++] = (byte)  value;
+        b[offset  ] = (byte)  value;
     }
 }
 
@@ -223,7 +223,7 @@ extern uint8_t get_uint8_slBuffer( slBuffer *buffer, size_t offset ) {
     byte *b = buffer->buffer;
     return (buffer->endiness == LittleEndian) ?
            b[offset]        | (b[offset + 1] <<  8) | (b[offset + 2] << 16) | (b[offset + 3] << 24 ) :
-           (b[offset] << 24) | (b[offset + 1] << 16) | (b[offset + 2] <<  8) |  b[offset + 3]       ;
+          (b[offset] << 24) | (b[offset + 1] << 16) | (b[offset + 2] <<  8) |  b[offset + 3]       ;
 }
 
 

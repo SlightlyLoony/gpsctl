@@ -15,21 +15,16 @@ typedef struct speedInfo {
     int nsBit;     // number of nanoseconds to receive or transmit a bit
     int nsChar;    // number of nanoseconds to receive or transmit a character
 } speedInfo;
-speedInfo getSpeedInfo( int fdPort );
 
-slReturn verifySerialDevice( const char *deviceName );
-
-#define RSC_READ_ERROR (-1)
-#define RSC_TIMED_OUT  (-2)
-int readSerialChar( int fdPort, long long msTimeout );
-
-int getBaudRate( int cookie );
 int getBaudRateCookie( int baudRate );
 bool ASCIIBaudRateSynchronizer( const char c, void **state);
-bool synchronize( int fdPort, baudRateSynchronizer, int );
 
+slReturn getSpeedInfo( int fdPort, speedInfo* );
+slReturn verifySerialDevice( const char *deviceName );
+slReturn readSerialChar( int fdPort, long long msTimeout );
+slReturn getBaudRate( int cookie );
+slReturn synchronize( int fdPort, baudRateSynchronizer, int );
 slReturn setTermOptions( int fdPort, int baud, int dataBits, int stopBits, bool parityEnable, bool odd );
-
 slReturn setTermOptionsBaud( int fdPort, int baud );
 
 int setBaudRate( int fdPort, int baudRate, bool synchronize, bool autoRate,

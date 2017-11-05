@@ -123,11 +123,12 @@ static slReturn makeFmtReturn( returnType type, errInfo error, void* info, const
 
 
 // Returns an error information structure with the given values.
-extern errorInfo_slReturn makeErrorInfo( char* fileName, uint32_t lineNumber, slReturn cause ) {
+extern errorInfo_slReturn createErrorInfo( char* fileName, char* functionName, uint32_t lineNumber, slReturn cause ) {
     errorInfo_slReturn result;
     result.cause = cause;
     result.lineNumber = lineNumber;
     result.fileName = fileName;
+    result.functionName = functionName;
     return result;
 }
 
@@ -176,34 +177,30 @@ extern void* getReturnInfo( slReturn value ) {
 
 
 // Print the message in the given slReturn, following the chain of errors if there is one.
-extern void printReturnChain( slReturn value ) {
+extern void printReturn( slReturn value, bool includeCaused, bool includeDebug ) {
 
+    // if we have a simple Ok, just leave...
     if( value == NULL ) return;
 
-    slReturn current = value;
-    do {
+    // a little analysis...
+    const char* msg = getReturnMsg( value );
+    bool longRec = (((shortRecord*) value)->def & SLRETURN_FIELD_MASK) == SLRETURN_LONG_FORM;
+    errInfo err = ((longRecord*) value)->error;
+    slReturn next = longRec ? err.cause : NULL;
+    bool root = (next == NULL);
 
-        // do we have a long record?
-        bool longRec = (((shortRecord*) value)->def & SLRETURN_FIELD_MASK) == SLRETURN_LONG_FORM;
+    // if we're not at the root cause, recurse until we get there...
+    if( !root ) printReturn( next, includeCaused, includeDebug );
 
-        // extract the stuff we need to print...
-        const char* msg = getReturnMsg( current );
-        if( msg == NULL ) msg = "[[no message]]";
-        errInfo error = ((longRecord*) current)->error;
-        char* fileName = error.fileName;
-        if( fileName == NULL ) fileName = "[[unknown file]]";
-        uint32_t lineNumber = error.lineNumber;
+    // if we're not supposed to be printing this line, skedaddle...
+    if( !root && !includeCaused ) return;
 
-        // ok, now we actually print the darned thing!
-        printf( "   %s --- (%s:%d)\n", msg, fileName, lineNumber );
-
-        // go to the next element in our chain...
-        if( longRec )
-            current = ((longRecord*) current)->error.cause;
-        else
-            current = NULL;
-
-    } while( current != NULL );
+    // finally, it's time to print our actual message...
+    char* prefix = root ? (isErrorReturn( value ) ? "Error: " : "") : "   Caused: ";
+    if( includeDebug && isErrorReturn( value ) )
+        printf( "%s%s  (%s:%s:%d)\n", prefix, msg, err.fileName, err.functionName, err.lineNumber );
+    else
+        printf( "%s%s\n", prefix, msg );
 }
 
 

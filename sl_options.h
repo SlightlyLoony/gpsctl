@@ -67,7 +67,8 @@ struct psloConfig {
 
 bool hasShortOption_slOptions( char, const state_slOptions* );
 bool hasLongOption_slOptions( const char*, const state_slOptions* );
-slReturn process_slOptions( int argc, const char *argv[], const psloConfig* config );
 char* getName_slOptions( const optionDef_slOptions* );
+
+slReturn process_slOptions( int argc, const char *argv[], const psloConfig* config );
 
 #endif //GPSCTL_SL_OPTIONS_H

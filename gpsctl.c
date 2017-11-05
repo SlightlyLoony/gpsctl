@@ -37,8 +37,8 @@
 // TODO: make sure we free any allocated slBuffers!
 // TODO: add needed printfs for verbose mode...
 // TODO: add filter for NMEA message types on echo, also message verifier (only echo good messages)
-// TODO: helper function (or macro?) for the awkward structure return values
 // TODO: add retries appropriately in UBX and serial operations...
+// TODO: handle better the problem of UBX being unreliable when NMEA data is enabled.  A robust NMEA data sense and disable during UBX activity may be called for...
 
 
 // these defines allow compiling on both an OS X development machine and the target Raspberry Pi.  If different
@@ -63,7 +63,7 @@
 #include "ublox.h"
 #include "cJSON.h"
 
-typedef enum { fixQuery, versionQuery } queryType;
+typedef enum { fixQuery, versionQuery, configQuery } queryType;
 typedef enum { syncNone, syncASCII, syncNMEA, syncUBX } syncType;
 typedef struct { char* name; syncType type; } syncTypeRec;
 
@@ -91,23 +91,23 @@ struct clientData_slOptions {
 };
 
 
-// Set the sync method to that specified in the argument.  Return true if there's no argument (and do nothing) or the
-// argument was recognized; false if there was an unrecognizable argument.
-static bool setSyncMethod( const char* arg, clientData_slOptions* clientData ) {
+// Set the sync method to that specified in the argument.  Returns Ok if there's no argument (and do nothing) or the
+// argument was recognized; or an Error if there was an unrecognizable argument.
+static slReturn setSyncMethod( const char* arg, clientData_slOptions* clientData ) {
 
     // if no argument was supplied, don't do anything at all...
-    if( arg == NULL ) return true;
+    if( arg == NULL ) return makeOkReturn();
 
     // otherwise, try to match the argument...
     for (int i = 0; i < ARRAY_SIZE(syncTypeRecs); i++) {
         if (0 == strncmp(arg, syncTypeRecs[i].name, strlen(arg))) {
             clientData->syncMethod = syncTypeRecs[i].type;
-            return true;
+            return makeOkReturn();
         }
     }
 
     // if we get here, we couldn't find the method, so do nothing but return a problem...
-    return false;
+    return makeErrorFmtMsgReturn( ERR_ROOT, "\"%s\" is not a recognized synchronization method", arg );
 }
 
 
@@ -184,9 +184,9 @@ static bool NMEABaudRateSynchronizer( const char c, void **state ) {
 }
 
 
-// Attempt to synchronize, using the given method at the current host baud rate.  Returns true if the synchronization
-// was successful, false otherwise.
-static bool syncSerial( const syncType type, const int fdPort, const int verbosity ) {
+// Attempt to synchronize, using the given method at the current host baud rate.  On an Ok response, returns true
+// or false for synchronization success as a bool in additional info.
+static slReturn syncSerial( const syncType type, const int fdPort, const int verbosity ) {
 
     // if our type is ubx, then we have to send messages and see if we get a valid response...
     if( type == syncUBX ) {
@@ -204,15 +204,15 @@ static bool syncSerial( const syncType type, const int fdPort, const int verbosi
 // Outputs a fix query, in English or JSON.
 static slReturn doFixQuery( const clientData_slOptions* clientData ) {
 
-    pvt_fix fix = {0}; // zeroes all elements...
+    ubxFix fix = {0}; // zeroes all elements...
     slReturn result = getFix( clientData->fdPort, clientData->verbosity, &fix );
     double msl_height_feet = 0.00328084 * fix.height_above_sea_level_mm;
     double height_accuracy_feet = 0.00328084 * fix.height_accuracy_mm;
     double horizontal_accuracy_feet = 0.00328084 * fix.horizontal_accuracy_mm;
     double speed_mph = fix.ground_speed_mm_s * 0.00223694;
     double speed_accuracy_mph = fix.ground_speed_accuracy_mm_s * 0.00223694;
-    if( !isOkReturn( result ) )
-        return makeErrorMsgReturn( ERRINFO( result ), "Problem obtaining fix from GPS" );
+    if( isErrorReturn( result ) )
+        return makeErrorMsgReturn( ERR_CAUSE( result ), "Problem obtaining fix from GPS" );
 
     if( clientData->json ) {
         cJSON *root;
@@ -269,7 +269,7 @@ static slReturn doFixQuery( const clientData_slOptions* clientData ) {
         }
         else
             printf( "        Fix: invalid\n" );
-        printf( " Satellites: %d (used for computing this fix)\n", fix.number_of_satellites_used );
+        printf( " Satellites: %d used for computing this fix\n", fix.number_of_satellites_used );
         printf( "   Accuracy: time (%d ns), height (+/-%.3f feet), position (+/-%.3f feet), heading(+/-%.3f degrees), speed(+/-%.3f mph)\n",
                 fix.time_accuracy_ns, height_accuracy_feet, horizontal_accuracy_feet, fix.heading_accuracy_deg, speed_accuracy_mph );
     }
@@ -283,8 +283,8 @@ static slReturn doVersionQuery( const clientData_slOptions* clientData ) {
 
     ubxVersion version = {0};  // zeroes all elements...
     slReturn result = getVersion( clientData->fdPort, clientData->verbosity, &version );
-    if( !isOkReturn( result ) )
-        return makeErrorMsgReturn( ERRINFO( result ), "Problem obtaining version information from GPS" );
+    if( isErrorReturn( result ) )
+        return makeErrorMsgReturn(ERR_CAUSE( result ), "Problem obtaining version information from GPS" );
 
     if( clientData->json ) {
 
@@ -317,6 +317,45 @@ static slReturn doVersionQuery( const clientData_slOptions* clientData ) {
 }
 
 
+// Outputs a configuration query, in English or JSON.
+static slReturn doConfigQuery( const clientData_slOptions* clientData ) {
+
+    ubxConfig config = {};  // zeroes all elements...
+    slReturn result = getConfig( clientData->fdPort, clientData->verbosity, &config );
+    if( isErrorReturn( result ) )
+        return makeErrorMsgReturn(ERR_CAUSE( result ), "Problem obtaining configuration information from GPS" );
+
+    if( clientData->json ) {
+//
+//        cJSON *root;
+//        root = cJSON_CreateObject();
+//        cJSON_AddItemToObject( root, "software_version", cJSON_CreateString( version.software ) );
+//        cJSON_AddItemToObject( root, "hardware_version", cJSON_CreateString( version.hardware ) );
+//        cJSON_AddItemToObject( root, "extensions",
+//                               cJSON_CreateStringArray( (const char**) version.extensions, version.number_of_extensions ) );
+//
+//        char *jsonStr = cJSON_PrintUnformatted( root );
+//        printf( "%s\n", jsonStr );
+//
+//        cJSON_Delete( root );
+    }
+    else {
+//        printf( "Software version: %s\n", version.software );
+//        free( version.software );
+//        printf( "Hardware version: %s\n", version.hardware );
+//        free( version.hardware );
+//        char **ptr = version.extensions;
+//        while( (*ptr) != NULL ) {
+//            printf( "       Extension: %s\n", *ptr );
+//            free( (*ptr) );
+//            ptr++;
+//        }
+    }
+
+    return makeOkReturn();
+}
+
+
 static slReturn parseMsgHelper( errorInfo_slReturn error, const optionDef_slOptions* def, char *pattern, ... ) {
 
     char* resolved;
@@ -328,7 +367,7 @@ static slReturn parseMsgHelper( errorInfo_slReturn error, const optionDef_slOpti
     va_end( args );
     
     // return our bad news...
-    slReturn result = makeErrorFmtMsgReturn( error, "Option parsing problem: [%s] %s", getName_slOptions( def ), resolved );
+    slReturn result = makeErrorFmtMsgReturn( error, "option parsing problem: [%s] %s", getName_slOptions( def ), resolved );
     free( resolved );
     return result;
 }
@@ -337,8 +376,8 @@ static slReturn parseMsgHelper( errorInfo_slReturn error, const optionDef_slOpti
 static slReturn parsePort( void* ptrArg, int intArg, const optionDef_slOptions *def, const char *arg, clientData_slOptions *clientData ) {
 
     slReturn vsd = verifySerialDevice( arg );
-    if( !isOkReturn( vsd ) )
-        return makeErrorFmtMsgReturn( ERRINFO( vsd ), "device \"%s\" is not a terminal", arg );
+    if( isErrorReturn( vsd ) )
+        return makeErrorFmtMsgReturn(ERR_CAUSE( vsd ), "device \"%s\" is not a terminal", arg );
 
     return makeOkReturn();
 }
@@ -352,11 +391,11 @@ static slReturn parseBaud( void* ptrArg, int intArg, const optionDef_slOptions* 
     char *endPtr;
     int baud = (int) strtol( arg, &endPtr, 10 );
     if( *endPtr != 0 )
-        return parseMsgHelper( ERRINFO( NULL ), def, "the specified baud rate (\"%s\") is not an integer", arg );
+        return parseMsgHelper(ERR_ROOT, def, "the specified baud rate (\"%s\") is not an integer", arg );
 
     // make sure the result is a valid baud rate...
     if( getBaudRateCookie( baud ) < 0 )
-        return parseMsgHelper( ERRINFO( NULL ), def, "the specified baud rate (\"%s\") is not a valid one (4800, 9600, 19200, etc.)", arg );
+        return parseMsgHelper(ERR_ROOT, def, "the specified baud rate (\"%s\") is not a valid one (4800, 9600, 19200, etc.)", arg );
 
     // we have a valid baud rate, so stuff it away and return in victory...
     *((int*)ptrArg) = baud;
@@ -364,23 +403,13 @@ static slReturn parseBaud( void* ptrArg, int intArg, const optionDef_slOptions* 
 }
 
 
-// Parse autobaud, which has an optional argument of ascii, nmea, or ubx.
-static slReturn parseAutobaud( void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* clientData ) {
+// Parse autobaud or sync, which have an optional argument of ascii, nmea, or ubx.
+static slReturn parseSyncMethod( void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* clientData ) {
 
     // if we get here, we couldn't find the argument...
-    if( !setSyncMethod( arg, clientData ) )
-        return parseMsgHelper( ERRINFO( NULL ), def, "the specified baud rate inference method (\"%s\") is unrecognizable; should be \"ascii\", \"nmea\", or \"ubx\"", arg );
-
-    return makeOkReturn();
-}
-
-
-// Parse sync, which has an optional argument of ascii, nmea, or ubx.
-static slReturn parseSync( void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* clientData ) {
-
-    // if we get here, we couldn't find the argument...
-    if( !setSyncMethod( arg, clientData ) )
-        return parseMsgHelper( ERRINFO( NULL ), def, "the specified baud rate synchronization method (\"%s\") is unrecognizable; should be \"ascii\", \"nmea\", or \"ubx\"", arg );
+    slReturn ssmResp = setSyncMethod( arg, clientData );
+    if( isErrorReturn( ssmResp ) )
+        return parseMsgHelper(ERR_CAUSE( ssmResp ), def, "the specified baud rate inference method (\"%s\") is unrecognizable; should be \"ascii\", \"nmea\", or \"ubx\"", arg );
 
     return makeOkReturn();
 }
@@ -408,7 +437,7 @@ static slReturn parseInt( void* ptrArg, int intArg, const optionDef_slOptions* d
         char *endPtr;
         n = (int) strtol(arg, &endPtr, 10);
         if (*endPtr != 0)
-            return parseMsgHelper( ERRINFO( NULL ), def, "the specified %s (\"%s\") is not an integer", def->argName, arg);
+            return parseMsgHelper(ERR_ROOT, def, "the specified %s (\"%s\") is not an integer", def->argName, arg);
     }
 
     // stuff it away to the given pointer...
@@ -432,7 +461,8 @@ static slReturn parseFlag( void* ptrArg, int intArg, const optionDef_slOptions* 
 typedef struct { char* name; queryType queryType; } queryDef;
 static queryDef queryDefs[] = {
         { "fix",     fixQuery     },
-        { "version", versionQuery }
+        { "version", versionQuery },
+        { "config",  configQuery  }
 };
 
 
@@ -448,7 +478,7 @@ static slReturn parseQuery( void* ptrArg, int intArg, const optionDef_slOptions*
     }
 
     // if we get here then we have a bogus query type...
-    return parseMsgHelper( ERRINFO( NULL ), def, "the specified %s (\"%s\") is not a valid query type", def->argName, arg );
+    return parseMsgHelper(ERR_ROOT, def, "the specified %s (\"%s\") is not a valid query type", def->argName, arg );
 }
 
 
@@ -473,7 +503,7 @@ static slReturn parseCount( void* ptrArg, int intArg, const optionDef_slOptions*
 static slReturn  constrainSync( const optionDef_slOptions* defs, const psloConfig* config, const state_slOptions* state ) {
 
     if( hasShortOption_slOptions( 'a', state ) )
-        return makeErrorMsgReturn( ERRINFO( NULL ), "-s, --sync may only be specified if -a, --autobaud is NOT specified" );
+        return makeErrorMsgReturn(ERR_ROOT, "-s, --sync may only be specified if -a, --autobaud is NOT specified" );
 
     return makeOkReturn();
 }
@@ -483,7 +513,7 @@ static slReturn  constrainSync( const optionDef_slOptions* defs, const psloConfi
 static slReturn  constrainJSON( const optionDef_slOptions* defs, const psloConfig* config, const state_slOptions* state ) {
 
     if( !hasShortOption_slOptions( 'q', state ) )
-        return makeErrorMsgReturn( ERRINFO( NULL ), "-j, --json may only be specified if -a, --query is also specified" );
+        return makeErrorMsgReturn(ERR_ROOT, "-j, --json may only be specified if -a, --query is also specified" );
 
     return makeOkReturn();
 }
@@ -493,7 +523,7 @@ static slReturn  constrainJSON( const optionDef_slOptions* defs, const psloConfi
 static slReturn  constrainBaud( const optionDef_slOptions* defs, const psloConfig* config, const state_slOptions* state ) {
 
     if( hasShortOption_slOptions( 'a', state ) )
-        return makeErrorMsgReturn( ERRINFO( NULL ), "-b, --baud may only be specified if -a, --autobaud is NOT specified" );
+        return makeErrorMsgReturn(ERR_ROOT, "-b, --baud may only be specified if -a, --autobaud is NOT specified" );
 
     return makeOkReturn();
 }
@@ -503,7 +533,7 @@ static slReturn  constrainBaud( const optionDef_slOptions* defs, const psloConfi
 static slReturn  constrainMinBaud( const optionDef_slOptions* defs, const psloConfig* config, const state_slOptions* state ) {
 
     if( !hasShortOption_slOptions( 'a', state ) )
-        return makeErrorMsgReturn( ERRINFO( NULL ), "-M, --minbaud may only be specified if -a, --autobaud is also specified" );
+        return makeErrorMsgReturn(ERR_ROOT, "-M, --minbaud may only be specified if -a, --autobaud is also specified" );
 
     return makeOkReturn();
 }
@@ -529,9 +559,9 @@ static slReturn actionSetup( const optionDef_slOptions* defs, const psloConfig* 
     // now we set the correct options (the configured baud rate, 8 data bits, 1 stop bit, no parity)
     // note that this baud rate may be incorrect, and we might try to infer it in a moment...
     slReturn result = setTermOptions( fdPort, CD->baud, 8, 1, false, false );
-    if( !isOkReturn( result ) ) {
+    if( isErrorReturn( result ) ) {
         close( fdPort );
-        return makeErrorMsgReturn( ERRINFO( result ), "Error when setting terminal options" );
+        return makeErrorMsgReturn(ERR_CAUSE( result ), "Error when setting terminal options" );
     }
 
     // stuff our file descriptor and return in victory...
@@ -576,10 +606,15 @@ static slReturn actionTeardown(  const optionDef_slOptions* defs, const psloConf
 // Sync action function, which synchronizes serial port receiver with the data stream using the configured method.
 static slReturn actionSync(  const optionDef_slOptions* defs, const psloConfig* config ) {
 
-    if( syncSerial( CD->syncMethod, CD->fdPort, CD->verbosity ) )
+    slReturn ssResp = syncSerial( CD->syncMethod, CD->fdPort, CD->verbosity );
+    if( isErrorReturn( ssResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( ssResp ), "error while synchronizing on serial data" );
+
+    bool success = (bool)(uintptr_t) getReturnInfo( ssResp );
+    if( success )
         return makeOkReturn();
     else
-        return makeErrorMsgReturn( ERRINFO( NULL ), "failed to synchronize" );
+        return makeErrorMsgReturn(ERR_ROOT, "failed to synchronize" );
 }
 
 
@@ -588,13 +623,13 @@ static slReturn  actionNMEA(  const optionDef_slOptions* defs, const psloConfig*
 
     clientData_slOptions* cd = config->clientData;
     slReturn resp = setNMEAData( cd->fdPort, cd->verbosity, cd->nmea );
-    if( !isOkReturn( resp ) )
-        return makeErrorFmtMsgReturn( ERRINFO( resp ), "failed to turn NMEA data %s", cd->nmea ? "on" : "off" );
+    if( isErrorReturn( resp ) )
+        return makeErrorFmtMsgReturn(ERR_CAUSE( resp ), "failed to turn NMEA data %s", cd->nmea ? "on" : "off" );
 
     return makeOkReturn();
 }
 
-// TODO: this should return an error if the query fails...
+
 // Query action function, which queries the U-Blox GPS for the specified data.
 static slReturn  actionQuery(  const optionDef_slOptions* defs, const psloConfig* config ) {
 
@@ -603,10 +638,11 @@ static slReturn  actionQuery(  const optionDef_slOptions* defs, const psloConfig
 
         case fixQuery:     resp = doFixQuery(     config->clientData ); break;
         case versionQuery: resp = doVersionQuery( config->clientData ); break;
-        default: return makeErrorFmtMsgReturn( ERRINFO( NULL ), "invalid query type: %d", config->clientData->queryType );
+        case configQuery:  resp = doConfigQuery(  config->clientData ); break;
+        default: return makeErrorFmtMsgReturn(ERR_ROOT, "invalid query type: %d", config->clientData->queryType );
     }
-    if( !isOkReturn( resp ) )
-        return makeErrorMsgReturn( ERRINFO( resp ), "problem executing GPS query" );
+    if( isErrorReturn( resp ) )
+        return makeErrorMsgReturn(ERR_CAUSE( resp ), "problem executing GPS query" );
     return makeOkReturn();
 }
 
@@ -621,7 +657,12 @@ static slReturn  actionEcho(  const optionDef_slOptions* defs, const psloConfig*
     long long maxEchoMS = 1000 * CD->echoSeconds;
 
     while( (CD->echoSeconds == 0) || ((currentTimeMs() - startTime) < maxEchoMS) ) {
-        int c = readSerialChar( CD->fdPort, 1000 );
+        slReturn rscResp = readSerialChar( CD->fdPort, 1000 );
+        if( isErrorReturn( rscResp ) )
+            return makeErrorMsgReturn( ERR_CAUSE( rscResp ), "couldn't read character while echoing" );
+        if( isWarningReturn( rscResp ) )
+            continue;  // we timed out; just try again...
+        int c = (char)(uintptr_t) getReturnInfo( rscResp );
         if( c >= 0 ) printf( "%c", c );
     }
 
@@ -635,8 +676,8 @@ static slReturn  actionEcho(  const optionDef_slOptions* defs, const psloConfig*
 static slReturn newBaud( int fdPort, int newBaud, bool verbose ) {
 
     slReturn resp = changeBaudRate( fdPort, (unsigned) newBaud, verbose );
-    if( !isOkReturn( resp ) )
-        return makeErrorMsgReturn( ERRINFO( resp ), "failed to change baud rate" );
+    if( isErrorReturn( resp ) )
+        return makeErrorMsgReturn(ERR_CAUSE( resp ), "failed to change baud rate" );
 
     return makeOkReturn();
 }
@@ -664,7 +705,7 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
 
     optionDef_slOptions autobaudDef = {
             1, "autobaud", 'a', argOptional,
-            parseAutobaud, NULL, 0,
+            parseSyncMethod, NULL, 0,
             NULL,
             NULL,
             "method",
@@ -741,7 +782,7 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
 
     optionDef_slOptions syncDef = {
             1, "sync", 's', argOptional,
-            parseSync, NULL, 0,
+            parseSyncMethod, NULL, 0,
             constrainSync,
             actionSync,
             "method",
@@ -814,7 +855,9 @@ int main( int argc, char *argv[] ) {
 
     slReturn resp = process_slOptions(argc, (const char **) argv, &config );
 
-    if( isErrorReturn( resp ) ) printReturnChain( resp );
+    if( isErrorReturn( resp ) ) printReturn( resp, true, true );
+
+    freeReturn( resp );
 
     exit( EXIT_SUCCESS );
 }

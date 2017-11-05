@@ -15,17 +15,18 @@ typedef void* slReturn;         // managed by slReturn internally; users shouldn
 typedef struct {
     slReturn cause;
     char* fileName;
+    char* functionName;
     uint32_t lineNumber;
 } errorInfo_slReturn;
 
 
-errorInfo_slReturn makeErrorInfo( char*, uint32_t, slReturn );
+errorInfo_slReturn createErrorInfo( char*, char*, uint32_t, slReturn );
 bool isOkReturn( slReturn );
 bool isErrorReturn( slReturn );
 bool isWarningReturn( slReturn );
 const char* getReturnMsg( slReturn );
 void* getReturnInfo( slReturn );
-void printReturnChain( slReturn );
+void printReturn( slReturn, bool, bool );
 void freeReturn( slReturn  );
 slReturn makeOkReturn();
 slReturn makeErrorReturn( errorInfo_slReturn );
@@ -46,6 +47,7 @@ slReturn makeOkInfoFmtMsgReturn( void*, const char*, ... );
 slReturn makeErrorInfoFmtMsgReturn( errorInfo_slReturn, void*, const char*, ... );
 slReturn makeWarningInfoFmtMsgReturn( void*, const char*, ... );
 
-#define ERRINFO(x) (makeErrorInfo( __FILE__, __LINE__, (x) ) )
+#define ERR_CAUSE(x) (createErrorInfo( __FILE__, (char*)__func__, __LINE__, (x) ) )
+#define ERR_ROOT (ERR_CAUSE(NULL))
 
 #endif //GPSCTL_SL_RESULT_H
