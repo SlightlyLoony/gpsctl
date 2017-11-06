@@ -26,12 +26,24 @@
 #define UBX_CFG_ANT  0x13
 #define UBX_CFG_NAV5 0x24
 #define UBX_CFG_GNSS 0x3E
+#define UBX_CFG_TP5  0x31
 #define UBX_CFG_CFG  0x09
 #define UBX_MON      0x0A
 #define UBX_MON_VER  0x04
 #define UBX_NAV      0x01
 #define UBX_NAV_PVT  0x07
+
 #define UBX_CFG_PRT_UART_ID = 0x01
+
+#define NAV_PVT_MAX_MS      2000
+#define CFG_NAV5_MAX_MS     2000
+#define MON_VER_MAX_MS      2000
+#define MON_VER_SYNC_MAX_MS 1200
+#define CFG_GNSS_MAX_MS     1000
+#define CFG_ANT_MAX_MS      1000
+#define CFG_PRT_MAX_MS      1000
+#define CFG_TP5_MAX_MS      1000
+
 
 static ubxType ut_ACK_NAK = { UBX_ACK, UBX_ACK_NAK };
 static ubxType ut_CFG_PRT = { UBX_CFG, UBX_CFG_PRT };
@@ -85,11 +97,11 @@ ubxMsg createUbxMsg( ubxType type, slBuffer *body ) {
 
 
 // Returns if all the requested bytes were successfully read.
-static slReturn readUbxBytes( int fdPort, byte *buffer, int *count, size_t max, long long startTime, long long charWaitMs ) {
+static slReturn readUbxBytes( int fdPort, byte *buffer, int *count, size_t max, int max_ms, long long startTime, long long charWaitMs ) {
 
     *count = 0;
 
-    while( ((currentTimeMs() - startTime) < 1000) && (*count < max) ) {
+    while( ((currentTimeMs() - startTime) < max_ms ) && (*count < max) ) {
         slReturn rscResp = readSerialChar( fdPort, charWaitMs );
 
         if( isErrorReturn( rscResp ) )
@@ -112,19 +124,19 @@ static slReturn readUbxBytes( int fdPort, byte *buffer, int *count, size_t max, 
 // The body (an slBuffer) is only allocated if returns Ok.
 #define UBX_SYNC1 (0xB5)
 #define UBX_SYNC2 (0x62)
-static slReturn rcvUbxMsg( int fdPort, ubxMsg* msg ) {
+static slReturn rcvUbxMsg( int fdPort, ubxMsg* msg, int max_ms ) {
 
     ubxMsg nomsg = { {0, 0}, NULL, {0, 0}};
     *msg = nomsg;
 
     long long startTime = currentTimeMs();
 
-    while( ((currentTimeMs() - startTime) < 1000) ) {
+    while( ((currentTimeMs() - startTime) < max_ms) ) {
 
         // first we synchronize on the 0xB5, 0x62 byte pair that starts every UBX message...
         int count = 0;
-        while( ((currentTimeMs() - startTime) < 1000) && (count < 2) ) {
-            slReturn rscResp = readSerialChar( fdPort, startTime + 1000 - currentTimeMs() );
+        while( ((currentTimeMs() - startTime) < max_ms) && (count < 2) ) {
+            slReturn rscResp = readSerialChar( fdPort, startTime + max_ms - currentTimeMs() );
 
             if( isErrorReturn( rscResp ) )
                 return makeErrorMsgReturn( ERR_CAUSE( rscResp ), "couldn't read serial character" );
@@ -149,32 +161,34 @@ static slReturn rcvUbxMsg( int fdPort, ubxMsg* msg ) {
 
         // we're synchronized, so it's time to get the message type...
         byte buff[2];
-        slReturn rubResp = readUbxBytes( fdPort, buff, &count, 2, startTime, startTime + 1000 - currentTimeMs() );
+        slReturn rubResp = readUbxBytes( fdPort, buff, &count, 2, max_ms, startTime, startTime + max_ms - currentTimeMs() );
         if( isErrorReturn( rubResp ) )
-            return makeErrorMsgReturn( ERR_CAUSE( rubResp ), "couldn't read serial characters while receiving UBX message" );
+            return makeErrorMsgReturn( ERR_CAUSE( rubResp ), "couldn't read serial characters while receiving UBX message type" );
         if( count < 2 ) continue;
         ubxType type = {buff[0], buff[1]};
         msg->type = type;
 
         // get the body length, little-endian...
-        rubResp = readUbxBytes( fdPort, buff, &count, 2, startTime, startTime + 1000 - currentTimeMs() );
+        rubResp = readUbxBytes( fdPort, buff, &count, 2, max_ms, startTime, startTime + max_ms - currentTimeMs() );
         if( isErrorReturn( rubResp ) )
-            return makeErrorMsgReturn( ERR_CAUSE( rubResp ), "couldn't read serial characters while receiving UBX message" );
+            return makeErrorMsgReturn( ERR_CAUSE( rubResp ), "couldn't read serial characters while receiving UBX message body length" );
         if( count < 2 ) continue;
         size_t length = buff[0] | (buff[1] << 8);
 
         // now get the body...
         msg->body = create_slBuffer( length, LittleEndian );
-        rubResp = readUbxBytes( fdPort, buffer_slBuffer( msg->body ), &count, length, startTime, startTime + 1000 - currentTimeMs() );
+        rubResp = readUbxBytes( fdPort, buffer_slBuffer( msg->body ), &count, length, max_ms, startTime, startTime + max_ms - currentTimeMs() );
         if( isErrorReturn( rubResp ) )
-            return makeErrorMsgReturn( ERR_CAUSE( rubResp ), "couldn't read serial characters while receiving UBX message" );
+            return makeErrorFmtMsgReturn( ERR_CAUSE( rubResp ),
+                                          "couldn't read serial characters while receiving UBX message body (0x%02x/0x%02x, %d bytes)",
+                                          type.class, type.id, length );
         msg->checksum = calcFletcherChecksum( *msg );  // this calculates what the checksum SHOULD be...
         if( count >= length ) {
 
             // finally, get the checksum...
-            rubResp = readUbxBytes( fdPort, buff, &count, 2, startTime, startTime + 1000 - currentTimeMs() );
+            rubResp = readUbxBytes( fdPort, buff, &count, 2, max_ms, startTime, startTime + max_ms - currentTimeMs() );
             if( isErrorReturn( rubResp ) )
-                return makeErrorMsgReturn( ERR_CAUSE( rubResp ), "couldn't read serial characters while receiving UBX message" );
+                return makeErrorMsgReturn( ERR_CAUSE( rubResp ), "couldn't read serial characters while receiving UBX message checksum" );
             if( count >= 2 ) {
                 if( (buff[0] == msg->checksum.ck_a) && (buff[1] == msg->checksum.ck_b) )
                     return makeOkReturn();
@@ -192,10 +206,11 @@ static slReturn rcvUbxMsg( int fdPort, ubxMsg* msg ) {
 
 
 // Waits for an ACK/NAK message.
+#define ACK_WAIT_MS 500
 static slReturn ubxAckWait( int fdPort ) {
 
     ubxMsg ackMsg;
-    slReturn result = rcvUbxMsg( fdPort, &ackMsg );
+    slReturn result = rcvUbxMsg( fdPort, &ackMsg, ACK_WAIT_MS );
     if( isErrorReturn( result ) ) return makeErrorMsgReturn(ERR_CAUSE( result ), "Problem receiving ACK message" );
 
     free(ackMsg.body);
@@ -258,7 +273,7 @@ static bool cmpUbxType( ubxType a, ubxType b ) {
 
 // Polls the GPX with the given message, then waits for the response and possibly an ACK/NAK.  The response message
 // body is only allocated on an ok response.
-static slReturn pollUbx( int fdPort, ubxMsg pollMsg, ubxMsg* answer ) {
+static slReturn pollUbx( int fdPort, ubxMsg pollMsg, int max_ms, ubxMsg* answer ) {
 
     // send the poll message...
     slReturn txResult = sendUbxMsg( fdPort, pollMsg );
@@ -266,7 +281,7 @@ static slReturn pollUbx( int fdPort, ubxMsg pollMsg, ubxMsg* answer ) {
     if( isErrorReturn( txResult ) ) return makeErrorMsgReturn( ERR_CAUSE( txResult ), "Problem sending poll message" );
 
     // now get the poll response message...
-    slReturn resp = rcvUbxMsg( fdPort, answer );
+    slReturn resp = rcvUbxMsg( fdPort, answer, max_ms );
     if( isErrorReturn( resp ) ) return makeErrorMsgReturn( ERR_CAUSE( resp ), "Problem receiving poll response" );
 
     // make sure it's the response type we expected...
@@ -346,7 +361,7 @@ extern slReturn ubxGetFix( int fdPort, int verbosity, ubxFix* fix ) {
 
     // get a fix from the GPS...
     ubxMsg fixMsg;
-    slReturn pollResp = pollUbx( fdPort, createUbxMsg( ut_NAV_PVT, create_slBuffer( 0, LittleEndian ) ), &fixMsg );
+    slReturn pollResp = pollUbx( fdPort, createUbxMsg( ut_NAV_PVT, create_slBuffer( 0, LittleEndian ) ), NAV_PVT_MAX_MS, &fixMsg );
     if( isErrorReturn( pollResp ) ) return pollResp;
     if( size_slBuffer( fixMsg.body ) < NAV_PVT_BODY_SIZE )
         return makeErrorFmtMsgReturn(ERR_ROOT, "unexpected NAV_PVT message body size: %d bytes", size_slBuffer( fixMsg.body ) );
@@ -393,7 +408,7 @@ extern slReturn ubxGetVersion( int fdPort, int verbosity, ubxVersion* version ) 
     slBuffer* body = create_slBuffer( 0, LittleEndian );
     ubxMsg msg = createUbxMsg( type, body );
     ubxMsg versionMsg;
-    slReturn result = pollUbx( fdPort, msg, &versionMsg );
+    slReturn result = pollUbx( fdPort, msg, MON_VER_MAX_MS, &versionMsg );
     if( isErrorReturn( result ) ) return result;
 
     // decode the message and print the results...
@@ -425,13 +440,84 @@ extern slReturn ubxGetVersion( int fdPort, int verbosity, ubxVersion* version ) 
 // appropriate reportResponse value.
 extern slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config ) {
 
-    ubxType type = { UBX_CFG, UBX_CFG_GNSS };
+    // get the antenna configuration...
+    ubxType antType = { UBX_CFG, UBX_CFG_ANT };
     slBuffer* body = create_slBuffer( 0, LittleEndian );
-    ubxMsg msg = createUbxMsg( type, body );
-    ubxMsg configMsg;
-    slReturn result = pollUbx( fdPort, msg, &configMsg );
+    ubxMsg msg = createUbxMsg( antType, body );
+    ubxMsg antMsg;
+    slReturn antResp = pollUbx( fdPort, msg, CFG_ANT_MAX_MS, &antMsg );
+    if( isErrorReturn( antResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( antResp ), "problem getting antenna information from GPS" );
+    uint16_t antMask = get_uint16_slBuffer( antMsg.body, 0 );
+    free( body );
+    free( antMsg.body );
+    config->antPwr          = isBitSet_slBits( antMask, 0 );
+    config->antShrtDet      = isBitSet_slBits( antMask, 1 );
+    config->antOpenDet      = isBitSet_slBits( antMask, 2 );
+    config->antPwrDwnOnShrt = isBitSet_slBits( antMask, 3 );
+    config->antAutoRec      = isBitSet_slBits( antMask, 4 );
 
-    return result;
+    // get the GNSS configuration...
+    ubxType gnssType = { UBX_CFG, UBX_CFG_GNSS };
+    body = create_slBuffer( 0, LittleEndian );
+    msg = createUbxMsg( gnssType, body );
+    ubxMsg gnssMsg;
+    slReturn gnssResp = pollUbx( fdPort, msg, CFG_GNSS_MAX_MS, &gnssMsg );
+    if( isErrorReturn( gnssResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( antResp ), "problem getting GNSS information from GPS" );
+    config->trkChnnls = get_uint8_slBuffer( gnssMsg.body, 1 );
+    config->gnssRecs = get_uint8_slBuffer( gnssMsg.body, 3 );  // number of configuration blocks...
+    config->gnss = safeMalloc( sizeof( ubxGNSSConfig ) * config->gnssRecs );
+    for( int i = 0; i < config->gnssRecs; i++ ) {
+        config->gnss[i].id        = (gnssID) get_uint8_slBuffer( gnssMsg.body,  4 + 8 * (size_t)i );
+        config->gnss[i].minChnnls =          get_uint8_slBuffer( gnssMsg.body,  5 + 8 * (size_t)i );
+        config->gnss[i].maxChnnls =          get_uint8_slBuffer( gnssMsg.body,  6 + 8 * (size_t)i );
+        config->gnss[i].enabled   = (bool)  (get_uint8_slBuffer( gnssMsg.body,  8 + 8 * (size_t)i ) & 0x01);
+        config->gnss[i].sigConfig =          get_uint8_slBuffer( gnssMsg.body, 10 + 8 * (size_t)i );
+    }
+    free( body );
+    free( gnssMsg.body );
+
+    // get the navigation engine configuration...
+    ubxType nav5Type = { UBX_CFG, UBX_CFG_NAV5 };
+    body = create_slBuffer( 0, LittleEndian );
+    msg = createUbxMsg( nav5Type, body );
+    ubxMsg nav5Msg;
+    slReturn nav5Resp = pollUbx( fdPort, msg, CFG_NAV5_MAX_MS, &nav5Msg );
+    if( isErrorReturn( nav5Resp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( antResp ), "problem getting navigation engine information from GPS" );
+    config->model               = (dynModel) get_uint8_slBuffer(  nav5Msg.body,  2 );
+    config->mode                = (fixMode)  get_uint8_slBuffer(  nav5Msg.body,  3 );
+    config->fixedAltM           = 0.01 *     get_int32_slBuffer(  nav5Msg.body,  4 );
+    config->fixedAltVarM2       = 0.0001 *   get_int32_slBuffer(  nav5Msg.body,  8 );
+    config->minElevDeg          =            get_int8_slBuffer(   nav5Msg.body, 12 );
+    config->pDoP                = 0.1 *      get_uint16_slBuffer( nav5Msg.body, 14 );
+    config->tDoP                = 0.1 *      get_uint16_slBuffer( nav5Msg.body, 16 );
+    config->pAccM               =            get_uint16_slBuffer( nav5Msg.body, 18 );
+    config->tAccM               =            get_uint16_slBuffer( nav5Msg.body, 20 );
+    config->staticHoldThreshCmS =            get_uint8_slBuffer(  nav5Msg.body, 22 );
+    config->dgnssTimeoutS       =            get_uint8_slBuffer(  nav5Msg.body, 23 );
+    config->cnoThreshNumSVs     =            get_uint8_slBuffer(  nav5Msg.body, 24 );
+    config->cnoThreshDbHz       =            get_uint8_slBuffer(  nav5Msg.body, 25 );
+    config->staticHoldMaxDistM  =            get_uint16_slBuffer( nav5Msg.body, 28 );
+    config->utcStandard         = (utcType)  get_uint8_slBuffer(  nav5Msg.body, 30 );
+    free( body );
+    free( nav5Msg.body );
+
+    // get the time pulse configuration...
+    ubxType tp5Type = { UBX_CFG, UBX_CFG_TP5 };
+    body = create_slBuffer( 1, LittleEndian );
+    *buffer_slBuffer( body ) = 1;
+    msg = createUbxMsg( tp5Type, body );
+    ubxMsg tp5Msg;
+    slReturn tp5Resp = pollUbx( fdPort, msg, CFG_TP5_MAX_MS, &tp5Msg );
+    if( isErrorReturn( tp5Resp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( antResp ), "problem getting time pulse information from GPS" );
+    free( body );
+    free( tp5Msg.body );
+
+
+    return makeOkReturn();
 }
 
 
@@ -451,9 +537,8 @@ extern slReturn ubxSynchronize( const int fdPort, const int verbosity ) {
         slBuffer *body = create_slBuffer(0, LittleEndian);
         ubxMsg msg = createUbxMsg(type, body);
         ubxMsg ans;
-        slReturn result = pollUbx( fdPort, msg, &ans );
+        slReturn result = pollUbx( fdPort, msg, MON_VER_SYNC_MAX_MS, &ans );
         if ( isOkReturn( result ) ) return makeOkReturn();
-        if( verbosity >= 3 ) printf( "." );  // just to show how many attempts it took to get synchronized...
     }
     return makeErrorMsgReturn( ERR_ROOT, "could not synchronize to UBX data" );
 }
@@ -466,10 +551,10 @@ static slReturn isNmeaOn( int fdPort ) {
     // poll for the current configuration...
     ubxMsg poll = createUbxMsg( ut_CFG_PRT, init_slBuffer( LittleEndian, 1 /* UBX_CFG_PRT_UART_ID */ ) );
     ubxMsg current;
-    slReturn resp = pollUbx( fdPort, poll, &current );
+    slReturn resp = pollUbx( fdPort, poll, CFG_PRT_MAX_MS, &current );
     if( isErrorReturn( resp ) ) return resp;
 
-    bool state =  isBitSet_slBits( get_uint16_slBuffer( current.body, 14 ), 1 ) ? 1 : 0;
+    bool state =  isBitSet_slBits( get_uint16_slBuffer( current.body, 14 ), 1 );
     return makeOkInfoReturn( bool2info( state ) );
 }
 
@@ -517,7 +602,7 @@ extern slReturn ubxSetNMEAData( int fdPort, int verbosity, bool nmeaOn ) {
     if( verbosity >= 3 ) printf( "Polling GPS UART configuration...\n" );
     ubxMsg poll = createUbxMsg( ut_CFG_PRT, init_slBuffer( LittleEndian, 1 /* UBX_CFG_PRT_UART_ID */ ) );
     ubxMsg current;
-    slReturn resp = pollUbx( fdPort, poll, &current );
+    slReturn resp = pollUbx( fdPort, poll, CFG_PRT_MAX_MS, &current );
     if( isErrorReturn( resp ) ) return resp;
 
     // now change the bit we need to diddle...
@@ -564,7 +649,7 @@ extern slReturn ubxChangeBaudRate( int fdPort, unsigned int newBaudRate, int ver
     // first we poll for the current configuration...
     ubxMsg current;
     ubxMsg pollMsg = createUbxMsg( ut_CFG_PRT, init_slBuffer( LittleEndian, 1 /* UBX_CFG_PRT_UART_ID */ ) );
-    slReturn pollAns = pollUbx( fdPort, pollMsg, &current );
+    slReturn pollAns = pollUbx( fdPort, pollMsg, CFG_PRT_MAX_MS, &current );
     if( isErrorReturn( pollAns ) ) {
         checkNMEA( fdPort, nmeaOn, verbosity );
         return makeErrorMsgReturn(ERR_CAUSE( pollAns ), "Problem polling for current configuration before changing baud rate" );
@@ -598,7 +683,7 @@ extern slReturn ubxChangeBaudRate( int fdPort, unsigned int newBaudRate, int ver
         if( verbosity > 0 ) printf( "ACK missing, repolling for status...\n" );
         ubxMsg repollResp;
         ubxMsg repollMsg = createUbxMsg( ut_CFG_PRT, init_slBuffer( LittleEndian, 1 /* UBX_CFG_PRT_UART_ID */ ) );
-        slReturn pollResp = pollUbx( fdPort, repollMsg, &repollResp );
+        slReturn pollResp = pollUbx( fdPort, repollMsg, CFG_PRT_MAX_MS, &repollResp );
         if( isErrorReturn( pollResp ) )
             return makeErrorMsgReturn(ERR_CAUSE( pollResp ), "Problem on second attempt to verify changed baud rate" );
     }

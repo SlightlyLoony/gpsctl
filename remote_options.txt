@@ -1,1 +1,1 @@
- --save_config
+ --query config

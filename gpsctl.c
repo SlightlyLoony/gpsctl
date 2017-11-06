@@ -188,6 +188,7 @@ static slReturn ensureUbxSynchronized( clientData_slOptions* clientData ) {
     if( clientData->ubxSynchronized ) return makeOkReturn();
     slReturn usResp = ubxSynchronize( clientData->fdPort, clientData->verbosity );
     if( isOkReturn( usResp ) ) clientData->ubxSynchronized = true;
+    if( (clientData->verbosity >= 2) && (clientData->ubxSynchronized) ) printf( "Synchronized to UBX data...\n" );
     return usResp;
 }
 
@@ -520,8 +521,8 @@ static slReturn  constrainSync( const optionDef_slOptions* defs, const psloConfi
 // JSON may only be specified if a query was specified...
 static slReturn  constrainJSON( const optionDef_slOptions* defs, const psloConfig* config, const state_slOptions* state ) {
 
-    if( !hasShortOption_slOptions( 'q', state ) )
-        return makeErrorMsgReturn(ERR_ROOT, "-j, --json may only be specified if -a, --query is also specified" );
+    if( !hasShortOption_slOptions( 'Q', state ) )
+        return makeErrorMsgReturn(ERR_ROOT, "-j, --json may only be specified if -Q, --query is also specified" );
 
     return makeOkReturn();
 }

@@ -66,8 +66,42 @@ typedef struct {
     int number_of_extensions;
 } ubxVersion;
 
+typedef enum { GPS, SBAS, Galileo, BeiDou, IMES, QZSS, GLONASS } gnssID;
+typedef enum { Portable, Stationary = 2, Pedestrian, Automotive, Sea, Air1G, Air2G, Air4G, Watch } dynModel;
+typedef enum { Only2D = 1, Only3D, Auto2D3D } fixMode;
+typedef enum { AutoUTC, USNO_UTC = 3, GLONASS_UTC = 6, BEIDOU_UTC } utcType;
 typedef struct {
+    gnssID id;
+    int minChnnls;
+    int maxChnnls;
+    bool enabled;
+    int sigConfig;
+} ubxGNSSConfig;
 
+typedef struct {
+    bool           antPwr;                  // true if antenna power is enabled
+    bool           antShrtDet;              // true if antenna short circuit detection is enabled
+    bool           antOpenDet;              // true if antenna open circuit detection is enabled
+    bool           antPwrDwnOnShrt;         // true if power down antenna on short detected
+    bool           antAutoRec;              // true if automatically recover from antenna short circuit
+    int            trkChnnls;               // number of hardware tracking channels
+    int            gnssRecs;                // number of GNSS records in gnss
+    ubxGNSSConfig* gnss;                    // configurations for each GNSS
+    dynModel       model;                   // navigation engine dynamic model
+    fixMode        mode;                    // navigation engine fix mode
+    double         fixedAltM;               // fixed altitude for 2D fix mode
+    double         fixedAltVarM2;           // fixed altitude variance for 2D mode
+    int            minElevDeg;              // minimum elevation for a GNSS satellite to be used in a fix
+    double         pDoP;                    // position DoP mask
+    double         tDoP;                    // time DoP mask
+    uint16_t       pAccM;                   // position accuracy mask
+    uint16_t       tAccM;                   // time accuracy mask
+    uint8_t        staticHoldThreshCmS;     // static hold threshold
+    uint8_t        dgnssTimeoutS;           // DGNSS timeout
+    uint8_t        cnoThreshNumSVs;         // number of satellites required to have C/NO above cnoThresh for a fix to be attempted
+    uint8_t        cnoThreshDbHz;           // C/NO threshold for deciding whether to attempt a fix
+    uint16_t       staticHoldMaxDistM;      // static hold distance threshold (before quitting static hold)
+    utcType        utcStandard;             // UTC standard used
 } ubxConfig;
 
 slReturn ubxGetVersion( int fdPort, int verbosity, ubxVersion* version );
