@@ -125,7 +125,7 @@ extern uint32_t get_uint32_slBuffer( slBuffer *buffer, size_t offset ) {
     byte *b = buffer->buffer;
     return (buffer->endiness == LittleEndian) ?
            b[offset]        | (b[offset + 1] <<  8) | (b[offset + 2] << 16) | (b[offset + 3] << 24 ) :
-           (b[offset] << 24) | (b[offset + 1] << 16) | (b[offset + 2] <<  8) |  b[offset + 3]       ;
+          (b[offset] << 24) | (b[offset + 1] << 16) | (b[offset + 2] <<  8) |  b[offset + 3]         ;
 }
 
 
@@ -174,7 +174,7 @@ extern uint16_t get_uint16_slBuffer( slBuffer *buffer, size_t offset ) {
     byte *b = buffer->buffer;
     return (buffer->endiness == LittleEndian) ?
            b[offset]        | (b[offset + 1] <<  8) | (b[offset + 2] << 16) | (b[offset + 3] << 24 ) :
-          (b[offset] << 24) | (b[offset + 1] << 16) | (b[offset + 2] <<  8) |  b[offset + 3]       ;
+          (b[offset] << 24) | (b[offset + 1] << 16) | (b[offset + 2] <<  8) |  b[offset + 3]         ;
 }
 
 
@@ -199,17 +199,9 @@ extern int16_t get_int16_slBuffer( slBuffer *buffer, size_t offset ) {
 extern void put_uint8_slBuffer( slBuffer *buffer, size_t offset, uint8_t value ) {
 
     // if we're about to write outside our buffer, just bail out...
-    if( (offset + 2) > buffer->size ) return;
+    if( (offset + 1) > buffer->size ) return;
 
-    byte* b = buffer->buffer;
-    if( buffer->endiness == LittleEndian ) {
-        b[offset++] = (byte)  value;
-        b[offset  ] = (byte) (value >> 8 );
-    }
-    else {
-        b[offset++] = (byte) (value >> 8 );
-        b[offset  ] = (byte)  value;
-    }
+    buffer->buffer[offset] = (byte) value;
 }
 
 
@@ -217,13 +209,10 @@ extern void put_uint8_slBuffer( slBuffer *buffer, size_t offset, uint8_t value )
 // instance controls the byte layout.  Note that if the value lies outside the allocated buffer, zero is returned.
 extern uint8_t get_uint8_slBuffer( slBuffer *buffer, size_t offset ) {
 
-    // if we're about to write outside our buffer, just bail out...
-    if ((offset + 2) > buffer->size) return 0;
+    // if we're about to read outside our buffer, just bail out...
+    if ((offset + 1) > buffer->size) return 0;
 
-    byte *b = buffer->buffer;
-    return (buffer->endiness == LittleEndian) ?
-           b[offset]        | (b[offset + 1] <<  8) | (b[offset + 2] << 16) | (b[offset + 3] << 24 ) :
-          (b[offset] << 24) | (b[offset + 1] << 16) | (b[offset + 2] <<  8) |  b[offset + 3]       ;
+    return (uint8_t) buffer->buffer[offset];
 }
 
 

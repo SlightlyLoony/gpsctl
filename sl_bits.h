@@ -5,6 +5,7 @@
 #ifndef GPSCTL_SL_BITS_H
 #define GPSCTL_SL_BITS_H
 
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
 

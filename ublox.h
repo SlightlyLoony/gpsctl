@@ -14,10 +14,10 @@
 #include <unistd.h>
 #include <sys/termios.h>
 #include "sl_general.h"
-#include "sl_serial.h"
-#include "sl_buffer.h"
 #include "sl_bits.h"
+#include "sl_buffer.h"
 #include "sl_return.h"
+#include "sl_serial.h"
 
 typedef enum ubxState    { Valid, NotValid, NotPresent } ubxState;
 
@@ -70,11 +70,12 @@ typedef struct {
 
 } ubxConfig;
 
-slReturn getVersion( int fdPort, int verbosity, ubxVersion *version );
-slReturn getFix( int fdPort, int verbosity, ubxFix *fix );
-slReturn getConfig( int fdPort, int verbosity, ubxConfig *config );
-slReturn changeBaudRate( int fdPort, unsigned int newBaudRate, int verbosity );
-slReturn setNMEAData( int fdPort, int verbosity, bool nmeaOn );
+slReturn ubxGetVersion( int fdPort, int verbosity, ubxVersion* version );
+slReturn ubxSaveConfig( int fdPort, int verbosity );
+slReturn ubxGetFix( int fdPort, int verbosity, ubxFix* fix );
+slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config );
+slReturn ubxChangeBaudRate( int fdPort, unsigned int newBaudRate, int verbosity );
+slReturn ubxSetNMEAData( int fdPort, int verbosity, bool nmeaOn );
 slReturn ubxSynchronize( const int, const int );
 
 #endif //GPSCTL_UBLOX_H

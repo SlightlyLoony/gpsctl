@@ -313,6 +313,11 @@ static slReturn helpAction( const optionDef_slOptions *defs, const psloConfig *c
 
         // now we make the name/argument string pieces...
         char *name = getName_slOptions( curDef );
+        if( name[1] == '-' ) {
+            char* name1 = concat( "    ", name );
+            free( name );
+            name = name1;
+        }
         char *namearg;
         if( curDef->arg == argNone )
             namearg = concat( name, "" );

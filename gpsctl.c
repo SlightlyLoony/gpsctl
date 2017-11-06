@@ -31,14 +31,13 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-// TODO: add save configuration
 // TODO: add set stationary or portable mode
 // TODO: set antenna and cable length specs
 // TODO: make sure we free any allocated slBuffers!
 // TODO: add needed printfs for verbose mode...
 // TODO: add filter for NMEA message types on echo, also message verifier (only echo good messages)?
 // TODO: troll all headers, inserting parameter names and return value comments
-// TODO: do save config to get a backup
+// TODO: add reset GPS command
 
 // these defines allow compiling on both an OS X development machine and the target Raspberry Pi.  If different
 // development environments or target machines are needed, these will likely need to be tweaked.
@@ -87,6 +86,7 @@ struct clientData_slOptions {
     queryType queryType;
     bool error;
     int fdPort;
+    bool ubxSynchronized;
 };
 
 
@@ -183,19 +183,28 @@ static bool NMEABaudRateSynchronizer( const char c, void **state ) {
 }
 
 
+// Ensure that has been synchronized UBX.  Returns Ok on success, or if UBX has already been synchronized.
+static slReturn ensureUbxSynchronized( clientData_slOptions* clientData ) {
+    if( clientData->ubxSynchronized ) return makeOkReturn();
+    slReturn usResp = ubxSynchronize( clientData->fdPort, clientData->verbosity );
+    if( isOkReturn( usResp ) ) clientData->ubxSynchronized = true;
+    return usResp;
+}
+
+
 // Attempt to synchronize, using the given method at the current host baud rate.  On an Ok response, returns true
 // or false for synchronization success as a bool in additional info.
-static slReturn syncSerial( const syncType type, const int fdPort, const int verbosity ) {
+static slReturn syncSerial( const syncType type, clientData_slOptions* clientData ) {
 
     // if our type is ubx, then we have to send messages and see if we get a valid response...
     if( type == syncUBX ) {
-        return ubxSynchronize( fdPort, verbosity );
+        return ensureUbxSynchronized( clientData );
     }
 
     // otherwise, we're going to sync on a presumed data stream (generally NMEA), so we're just listening...
     else {
         baudRateSynchronizer* syncer = (type == syncNMEA) ? NMEABaudRateSynchronizer : ASCIIBaudRateSynchronizer;
-        return synchronize( fdPort, syncer, verbosity );
+        return synchronize( clientData->fdPort, syncer, clientData->verbosity );
     }
 }
 
@@ -204,7 +213,7 @@ static slReturn syncSerial( const syncType type, const int fdPort, const int ver
 static slReturn doFixQuery( const clientData_slOptions* clientData ) {
 
     ubxFix fix = {0}; // zeroes all elements...
-    slReturn result = getFix( clientData->fdPort, clientData->verbosity, &fix );
+    slReturn result = ubxGetFix( clientData->fdPort, clientData->verbosity, &fix );
     double msl_height_feet = 0.00328084 * fix.height_above_sea_level_mm;
     double height_accuracy_feet = 0.00328084 * fix.height_accuracy_mm;
     double horizontal_accuracy_feet = 0.00328084 * fix.horizontal_accuracy_mm;
@@ -281,7 +290,7 @@ static slReturn doFixQuery( const clientData_slOptions* clientData ) {
 static slReturn doVersionQuery( const clientData_slOptions* clientData ) {
 
     ubxVersion version = {0};  // zeroes all elements...
-    slReturn result = getVersion( clientData->fdPort, clientData->verbosity, &version );
+    slReturn result = ubxGetVersion( clientData->fdPort, clientData->verbosity, &version );
     if( isErrorReturn( result ) )
         return makeErrorMsgReturn(ERR_CAUSE( result ), "Problem obtaining version information from GPS" );
 
@@ -320,7 +329,7 @@ static slReturn doVersionQuery( const clientData_slOptions* clientData ) {
 static slReturn doConfigQuery( const clientData_slOptions* clientData ) {
 
     ubxConfig config = {};  // zeroes all elements...
-    slReturn result = getConfig( clientData->fdPort, clientData->verbosity, &config );
+    slReturn result = ubxGetConfig( clientData->fdPort, clientData->verbosity, &config );
     if( isErrorReturn( result ) )
         return makeErrorMsgReturn(ERR_CAUSE( result ), "Problem obtaining configuration information from GPS" );
 
@@ -615,7 +624,7 @@ static slReturn actionTeardown(  const optionDef_slOptions* defs, const psloConf
 // Sync action function, which synchronizes serial port receiver with the data stream using the configured method.
 static slReturn actionSync(  const optionDef_slOptions* defs, const psloConfig* config ) {
 
-    slReturn ssResp = syncSerial( CD->syncMethod, CD->fdPort, CD->verbosity );
+    slReturn ssResp = syncSerial( CD->syncMethod, config->clientData );
     if( isErrorReturn( ssResp ) )
         return makeErrorMsgReturn( ERR_CAUSE( ssResp ), "error while synchronizing on serial data" );
 
@@ -631,11 +640,11 @@ static slReturn actionSync(  const optionDef_slOptions* defs, const psloConfig* 
 static slReturn  actionNMEA(  const optionDef_slOptions* defs, const psloConfig* config ) {
 
     clientData_slOptions* clientData = config->clientData;
-    slReturn usResp = ubxSynchronize( clientData->fdPort, clientData->verbosity );
+    slReturn usResp = ensureUbxSynchronized( clientData );
     if( isErrorReturn( usResp ) )
         return makeErrorMsgReturn( ERR_CAUSE( usResp ), "could not synchronize UBX protocol" );
 
-    slReturn resp = setNMEAData( clientData->fdPort, clientData->verbosity, clientData->nmea );
+    slReturn resp = ubxSetNMEAData( clientData->fdPort, clientData->verbosity, clientData->nmea );
     if( isErrorReturn( resp ) )
         return makeErrorFmtMsgReturn(ERR_CAUSE( resp ), "failed to turn NMEA data %s", clientData->nmea ? "on" : "off" );
 
@@ -647,7 +656,7 @@ static slReturn  actionNMEA(  const optionDef_slOptions* defs, const psloConfig*
 static slReturn  actionQuery(  const optionDef_slOptions* defs, const psloConfig* config ) {
 
     clientData_slOptions* clientData = config->clientData;
-    slReturn usResp = ubxSynchronize( clientData->fdPort, clientData->verbosity );
+    slReturn usResp = ensureUbxSynchronized( clientData );
     if( isErrorReturn( usResp ) )
         return makeErrorMsgReturn( ERR_CAUSE( usResp ), "could not synchronize UBX protocol" );
 
@@ -661,6 +670,24 @@ static slReturn  actionQuery(  const optionDef_slOptions* defs, const psloConfig
     }
     if( isErrorReturn( resp ) )
         return makeErrorMsgReturn(ERR_CAUSE( resp ), "problem executing GPS query" );
+    return makeOkReturn();
+}
+
+
+// Save configuration action function, which saves the current U-Blox GPS configuration to battery-backed RAM.
+static slReturn  actionSaveConfig(  const optionDef_slOptions* defs, const psloConfig* config ) {
+
+    // make sure we're synchronized...
+    clientData_slOptions* clientData = config->clientData;
+    slReturn usResp = ensureUbxSynchronized( clientData );
+    if( isErrorReturn( usResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( usResp ), "could not synchronize UBX protocol" );
+
+    // save the GPS configuration...
+    slReturn uscResp = ubxSaveConfig( config->clientData->fdPort, config->clientData->verbosity );
+    if( isErrorReturn( uscResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( uscResp ), "problem saving GPS configuration" );
+
     return makeOkReturn();
 }
 
@@ -700,7 +727,7 @@ static slReturn  actionQuiet(  const optionDef_slOptions* defs, const psloConfig
 // Change baud rate on GPS and on host port...
 static slReturn newBaud( int fdPort, int newBaud, bool verbose ) {
 
-    slReturn resp = changeBaudRate( fdPort, (unsigned) newBaud, verbose );
+    slReturn resp = ubxChangeBaudRate( fdPort, (unsigned) newBaud, verbose );
     if( isErrorReturn( resp ) )
         return makeErrorMsgReturn(ERR_CAUSE( resp ), "failed to change baud rate" );
 
@@ -711,116 +738,125 @@ static slReturn newBaud( int fdPort, int newBaud, bool verbose ) {
 static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientData ) {
 
     optionDef_slOptions echoDef = {
-            1, "echo", 'e', argOptional,
-            parseInt, (void*) &clientData->echoSeconds, 0,
-            NULL,
-            actionEcho,
-            "seconds",
+            1, "echo", 'e', argOptional,                                        // max, long, short, arg
+            parseInt, (void*) &clientData->echoSeconds, 0,                      // parser, ptrArg, intArg
+            NULL,                                                               // constrainer
+            actionEcho,                                                         // action
+            "seconds",                                                          // argument name
             "echo human-readable GPS data to stdout for the given time (0 or unspecified means forever)"
     };
 
     optionDef_slOptions portDef = {
-            1, "port", 'p', argRequired,
-            parsePort, NULL, 0,
-            NULL,
-            NULL,
-            "device",
+            1, "port", 'p', argRequired,                                        // max, long, short, arg
+            parsePort, NULL, 0,                                                 // parser, ptrArg, intArg
+            NULL,                                                               // constrainer
+            NULL,                                                               // action
+            "device",                                                           // argument name
             "specify the port device (default is '/dev/serial0')"
     };
 
     optionDef_slOptions autobaudDef = {
-            1, "autobaud", 'a', argOptional,
-            parseSyncMethod, NULL, 0,
-            NULL,
-            NULL,
-            "method",
+            1, "autobaud", 'a', argOptional,                                    // max, long, short, arg
+            parseSyncMethod, NULL, 0,                                           // parser, ptrArg, intArg
+            NULL,                                                               // constrainer
+            NULL,                                                               // action
+            "method",                                                           // argument name
             "infer baud rate using ascii, nmea, ubx data (default is ubx)"
     };
 
 
     optionDef_slOptions verboseDef = {
-            2, "verbose", 'v', argNone,
-            parseCount, (void*) &clientData->verbosity, 0,
-            constrainVerbosity,
-            NULL,
-            NULL,
+            2, "verbose", 'v', argNone,                                         // max, long, short, arg
+            parseCount, (void*) &clientData->verbosity, 0,                      // parser, ptrArg, intArg
+            constrainVerbosity,                                                 // constrainer
+            NULL,                                                               // action
+            NULL,                                                               // argument name
             "get verbose messages"
     };
 
 
     optionDef_slOptions quietDef = {
-            1, "quiet", 'q', argNone,
-            NULL, NULL, 0,
-            NULL,
-            actionQuiet,
-            NULL,
+            1, "quiet", 'q', argNone,                                           // max, long, short, arg
+            NULL, NULL, 0,                                                      // parser, ptrArg, intArg
+            NULL,                                                               // constrainer
+            actionQuiet,                                                        // action
+            NULL,                                                               // argument name
             "get verbose messages"
     };
 
 
     optionDef_slOptions jsonDef = {
-            3, "json", 'j', argNone,
-            parseFlag, (void*) &clientData->json, 1,
-            constrainJSON,
-            NULL,
-            NULL,
+            3, "json", 'j', argNone,                                            // max, long, short, arg
+            parseFlag, (void*) &clientData->json, 1,                            // parser, ptrArg, intArg
+            constrainJSON,                                                      // constrainer
+            NULL,                                                               // action
+            NULL,                                                               // argument name
             "select JSON query output"
     };
 
 
     optionDef_slOptions baudDef = {
-            1, "baud", 'b', argRequired,
-            parseBaud, (void*) &clientData->baud, 0,
-            constrainBaud,
-            NULL,
-            "baud rate",
+            1, "baud", 'b', argRequired,                                        // max, long, short, arg
+            parseBaud, (void*) &clientData->baud, 0,                            // parser, ptrArg, intArg
+            constrainBaud,                                                      // constrainer
+            NULL,                                                               // action
+            "baud rate",                                                        // argument name
             "specify host baud rate (default is '9600'); any standard rate is allowed"
     };
 
 
     optionDef_slOptions minBaudDef = {
-            1, "minbaud", 'M', argRequired,
-            parseBaud, (void*) &clientData->minBaud, 0,
-            constrainMinBaud,
-            NULL,
-            "baud rate",
+            1, "minbaud", 'M', argRequired,                                     // max, long, short, arg
+            parseBaud, (void*) &clientData->minBaud, 0,                         // parser, ptrArg, intArg
+            constrainMinBaud,                                                   // constrainer
+            NULL,                                                               // action
+            "baud rate",                                                        // argument name
             "specify minimum baud rate for autobaud (default is '9600'); any standard rate is allowed"
     };
 
 
     optionDef_slOptions newbaudDef = {
-            1, "newbaud", 'B', argRequired,
-            parseBaud, (void*) &clientData->newbaud, 0,
-            NULL,
-            NULL,
-            "baud rate",
+            1, "newbaud", 'B', argRequired,                                     // max, long, short, arg
+            parseBaud, (void*) &clientData->newbaud, 0,                         // parser, ptrArg, intArg
+            NULL,                                                               // constrainer
+            NULL,                                                               // action
+            "baud rate",                                                        // argument name
             "change the U-Blox and host baud rates to the specified standard rate"
     };
 
     optionDef_slOptions queryDef = {
-            1, "query", 'Q', argRequired,
-            parseQuery, NULL, 0,
-            NULL,
-            actionQuery,
-            "query type",
+            1, "query", 'Q', argRequired,                                       // max, long, short, arg
+            parseQuery, NULL, 0,                                                // parser, ptrArg, intArg
+            NULL,                                                               // constrainer
+            actionQuery,                                                        // action
+            "query type",                                                       // argument name
             "query the GPS for info (see \"Query types\" below)"
     };
 
     optionDef_slOptions nmeaDef = {
-            1, "nmea", 'n', argRequired,
-            parseBool, (void*) &clientData->nmea, 0,
-            NULL,
-            actionNMEA,
-            "yes/no",
+            1, "nmea", 'n', argRequired,                                        // max, long, short, arg
+            parseBool, (void*) &clientData->nmea, 0,                            // parser, ptrArg, intArg
+            NULL,                                                               // constrainer
+            actionNMEA,                                                         // action
+            "yes/no",                                                           // argument name
             "configure whether the GPS sends NMEA data to the serial port (see \"Yes or no values\" below)"
     };
 
     optionDef_slOptions syncDef = {
-            1, "sync", 's', argOptional,
-            parseSyncMethod, NULL, 0,
-            constrainSync,
-            actionSync,
-            "method",
+            1, "sync", 's', argOptional,                                        // max, long, short, arg
+            parseSyncMethod, NULL, 0,                                           // parser, ptrArg, intArg
+            constrainSync,                                                      // constrainer
+            actionSync,                                                         // action
+            "method",                                                           // argument name
+            "synchronize using ascii, nmea, ubx data (default is ubx)"
+    };
+
+    optionDef_slOptions saveConfigDef = {
+            1, "save_config", 0, argNone,                                       // max, long, short, arg
+            NULL, NULL, 0,                                                      // parser, ptrArg, intArg
+            NULL,                                                               // constrainer
+            actionSaveConfig,                                                   // action
+            NULL,                                                               // argument name
             "synchronize using ascii, nmea, ubx data (default is ubx)"
     };
 
@@ -836,6 +872,7 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
             newbaudDef,
             nmeaDef,
             queryDef,
+            saveConfigDef,
             echoDef,
             { 0 }
     };
@@ -880,6 +917,7 @@ int main( int argc, char *argv[] ) {
     clientData.port = "/dev/serial0";
     clientData.syncMethod = syncUBX;
     clientData.verbosity = 1;
+    clientData.ubxSynchronized = false;
 
     psloConfig config = {
             getOptionDefs( &clientData ),                       // our command-line option definitions...

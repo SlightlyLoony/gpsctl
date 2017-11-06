@@ -26,6 +26,7 @@
 #define UBX_CFG_ANT  0x13
 #define UBX_CFG_NAV5 0x24
 #define UBX_CFG_GNSS 0x3E
+#define UBX_CFG_CFG  0x09
 #define UBX_MON      0x0A
 #define UBX_MON_VER  0x04
 #define UBX_NAV      0x01
@@ -35,6 +36,7 @@
 static ubxType ut_ACK_NAK = { UBX_ACK, UBX_ACK_NAK };
 static ubxType ut_CFG_PRT = { UBX_CFG, UBX_CFG_PRT };
 static ubxType ut_NAV_PVT = { UBX_NAV, UBX_NAV_PVT };
+static ubxType ut_CFG_CFG = { UBX_CFG, UBX_CFG_CFG };
 
 
 typedef struct ubxMsg {
@@ -340,7 +342,7 @@ static void correctTime( ubxFix *fix ) {
 // Fills the fix structure at the given pointer with information about a time and position fix obtained from the
 // GPS system.  Returns the appropriate reportResponse value.
 #define NAV_PVT_BODY_SIZE 92
-extern slReturn getFix( int fdPort, int verbosity, ubxFix *fix ) {
+extern slReturn ubxGetFix( int fdPort, int verbosity, ubxFix* fix ) {
 
     // get a fix from the GPS...
     ubxMsg fixMsg;
@@ -385,7 +387,7 @@ extern slReturn getFix( int fdPort, int verbosity, ubxFix *fix ) {
 
 // Fills the ubxVersion structure at the given pointer with information about the GPS's version.  Returns the
 // appropriate reportResponse value.
-extern slReturn getVersion(int fdPort, int verbosity, ubxVersion *version ) {
+extern slReturn ubxGetVersion( int fdPort, int verbosity, ubxVersion* version ) {
 
     ubxType type = { UBX_MON, UBX_MON_VER };
     slBuffer* body = create_slBuffer( 0, LittleEndian );
@@ -421,7 +423,7 @@ extern slReturn getVersion(int fdPort, int verbosity, ubxVersion *version ) {
 
 // Fills the ubxVersion structure at the given pointer with information about the GPS's version.  Returns the
 // appropriate reportResponse value.
-extern slReturn getConfig(int fdPort, int verbosity, ubxConfig* config ) {
+extern slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config ) {
 
     ubxType type = { UBX_CFG, UBX_CFG_GNSS };
     slBuffer* body = create_slBuffer( 0, LittleEndian );
@@ -468,12 +470,32 @@ static slReturn isNmeaOn( int fdPort ) {
     if( isErrorReturn( resp ) ) return resp;
 
     bool state =  isBitSet_slBits( get_uint16_slBuffer( current.body, 14 ), 1 ) ? 1 : 0;
-    return makeOkInfoReturn( (void*) state );
+    return makeOkInfoReturn( bool2info( state ) );
+}
+
+
+extern slReturn ubxSaveConfig( int fdPort, int verbosity ) {
+
+    // construct the save configuration message...
+    slBuffer* saveMsgBody = create_slBuffer( 13, LittleEndian );
+    put_uint32_slBuffer( saveMsgBody,  0, 0x0000 );  // clear mask all off...
+    put_uint32_slBuffer( saveMsgBody,  4, 0x041B );  // save mask: ioPort, msgConf, navConf, rxmConf, antConf all on...
+    put_uint32_slBuffer( saveMsgBody,  8, 0x0000 );  // load mask all off...
+    put_uint8_slBuffer(  saveMsgBody, 12, 0x01   );  // battery-backed RAM...
+    ubxMsg saveMsg = createUbxMsg( ut_CFG_CFG, saveMsgBody );
+
+    // now send it, and wait for our ack...
+    slReturn submResp = sendUbxAckedMsg( fdPort, saveMsg );
+    if( isErrorReturn( submResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( submResp ), "failed to save GPS configuration" );
+
+    if( verbosity >= 1 ) printf( "Saved GPS configuration\n" );
+    return makeOkReturn();
 }
 
 
 // Configures whether the GPS transmits NMEA periodically on the UART.  Returns success or failure.
-extern slReturn setNMEAData( int fdPort, int verbosity, bool nmeaOn ) {
+extern slReturn ubxSetNMEAData( int fdPort, int verbosity, bool nmeaOn ) {
 
     char* onoff = nmeaOn ? "on" : "off";
 
@@ -519,11 +541,11 @@ extern slReturn setNMEAData( int fdPort, int verbosity, bool nmeaOn ) {
 static slReturn checkNMEA( int fdPort, bool nmeaOn, int verbosity ) {
     if( !nmeaOn ) return makeOkReturn();
     if( verbosity > 1 ) printf( "Turning NMEA data back on...\n" );
-    return setNMEAData( fdPort, verbosity, true );
+    return ubxSetNMEAData( fdPort, verbosity, true );
 }
 
 
-extern slReturn changeBaudRate( int fdPort, unsigned int newBaudRate, int verbosity ) {
+extern slReturn ubxChangeBaudRate( int fdPort, unsigned int newBaudRate, int verbosity ) {
 
     // if NMEA data is on, turn it off and remember...
     slReturn nmeaResp = isNmeaOn( fdPort );
@@ -533,7 +555,7 @@ extern slReturn changeBaudRate( int fdPort, unsigned int newBaudRate, int verbos
         if( verbosity ) printf( "NMEA data is turned on, so turning it off...\n" );
 
         // turn NMEA data off, wait a second for the accumulated data to be transmitted, then flush everything...
-        slReturn ans = setNMEAData( fdPort, verbosity, false );
+        slReturn ans = ubxSetNMEAData( fdPort, verbosity, false );
         if( isErrorReturn( ans ) ) return makeErrorMsgReturn(ERR_CAUSE( ans ), "Could not turn NMEA data off" );
         sleep( 1 );
         tcflush( fdPort, TCIOFLUSH );

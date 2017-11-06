@@ -1,1 +1,1 @@
- -q config
+ --save_config
