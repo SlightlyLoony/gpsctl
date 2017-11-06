@@ -50,4 +50,13 @@ slReturn makeWarningInfoFmtMsgReturn( void*, const char*, ... );
 #define ERR_CAUSE(x) (createErrorInfo( __FILE__, (char*)__func__, __LINE__, (x) ) )
 #define ERR_ROOT (ERR_CAUSE(NULL))
 
+#define getReturnInfoBool(x) ((bool)(uintptr_t)getReturnInfo(x))
+#define getReturnInfoInt32(x) ((int32_t)(uintptr_t)getReturnInfo(x))
+#define getReturnInfoUint32(x) ((uint32_t)(uintptr_t)getReturnInfo(x))
+#define getReturnInfoChar(x) ((char)(uintptr_t)getReturnInfo(x))
+
+#define char2info(x) ((void*)(uintptr_t)(x))
+#define int2info(x) ((void*)(uintptr_t)(x))
+#define bool2info(x) ((void*)(uintptr_t)(x))
+
 #endif //GPSCTL_SL_RESULT_H

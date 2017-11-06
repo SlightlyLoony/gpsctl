@@ -36,10 +36,9 @@
 // TODO: set antenna and cable length specs
 // TODO: make sure we free any allocated slBuffers!
 // TODO: add needed printfs for verbose mode...
-// TODO: add filter for NMEA message types on echo, also message verifier (only echo good messages)
-// TODO: add retries appropriately in UBX and serial operations...
-// TODO: handle better the problem of UBX being unreliable when NMEA data is enabled.  A robust NMEA data sense and disable during UBX activity may be called for...
-
+// TODO: add filter for NMEA message types on echo, also message verifier (only echo good messages)?
+// TODO: troll all headers, inserting parameter names and return value comments
+// TODO: do save config to get a backup
 
 // these defines allow compiling on both an OS X development machine and the target Raspberry Pi.  If different
 // development environments or target machines are needed, these will likely need to be tweaked.
@@ -538,6 +537,16 @@ static slReturn  constrainMinBaud( const optionDef_slOptions* defs, const psloCo
     return makeOkReturn();
 }
 
+
+// Verbosity may only be specified if quiet was NOT specified...
+static slReturn  constrainVerbosity( const optionDef_slOptions* defs, const psloConfig* config, const state_slOptions* state ) {
+
+    if( hasShortOption_slOptions( 'q', state ) )
+        return makeErrorMsgReturn(ERR_ROOT, "-v, --verbosity d may only be specified if -q, --quiet is NOT specified" );
+
+    return makeOkReturn();
+}
+
 #define CD (config->clientData)
 #define V0 (CD->verbosity >= 0)
 #define V1 (CD->verbosity >= 1)
@@ -566,7 +575,7 @@ static slReturn actionSetup( const optionDef_slOptions* defs, const psloConfig* 
 
     // stuff our file descriptor and return in victory...
     CD->fdPort = fdPort;
-    if( V1 ) printf( "Serial port open and configured...\n" );
+    if( V2 ) printf( "Serial port open and configured...\n" );
     return makeOkReturn();
 
     // TODO: move this code into separate actions for synchronizing or inferring...
@@ -610,7 +619,7 @@ static slReturn actionSync(  const optionDef_slOptions* defs, const psloConfig* 
     if( isErrorReturn( ssResp ) )
         return makeErrorMsgReturn( ERR_CAUSE( ssResp ), "error while synchronizing on serial data" );
 
-    bool success = (bool)(uintptr_t) getReturnInfo( ssResp );
+    bool success = getReturnInfoChar( ssResp );
     if( success )
         return makeOkReturn();
     else
@@ -621,10 +630,14 @@ static slReturn actionSync(  const optionDef_slOptions* defs, const psloConfig* 
 // NMEA action function, which turns NMEA data on or off on the U-Blox GPS.
 static slReturn  actionNMEA(  const optionDef_slOptions* defs, const psloConfig* config ) {
 
-    clientData_slOptions* cd = config->clientData;
-    slReturn resp = setNMEAData( cd->fdPort, cd->verbosity, cd->nmea );
+    clientData_slOptions* clientData = config->clientData;
+    slReturn usResp = ubxSynchronize( clientData->fdPort, clientData->verbosity );
+    if( isErrorReturn( usResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( usResp ), "could not synchronize UBX protocol" );
+
+    slReturn resp = setNMEAData( clientData->fdPort, clientData->verbosity, clientData->nmea );
     if( isErrorReturn( resp ) )
-        return makeErrorFmtMsgReturn(ERR_CAUSE( resp ), "failed to turn NMEA data %s", cd->nmea ? "on" : "off" );
+        return makeErrorFmtMsgReturn(ERR_CAUSE( resp ), "failed to turn NMEA data %s", clientData->nmea ? "on" : "off" );
 
     return makeOkReturn();
 }
@@ -633,13 +646,18 @@ static slReturn  actionNMEA(  const optionDef_slOptions* defs, const psloConfig*
 // Query action function, which queries the U-Blox GPS for the specified data.
 static slReturn  actionQuery(  const optionDef_slOptions* defs, const psloConfig* config ) {
 
-    slReturn resp;
-    switch( config->clientData->queryType ) {
+    clientData_slOptions* clientData = config->clientData;
+    slReturn usResp = ubxSynchronize( clientData->fdPort, clientData->verbosity );
+    if( isErrorReturn( usResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( usResp ), "could not synchronize UBX protocol" );
 
-        case fixQuery:     resp = doFixQuery(     config->clientData ); break;
-        case versionQuery: resp = doVersionQuery( config->clientData ); break;
-        case configQuery:  resp = doConfigQuery(  config->clientData ); break;
-        default: return makeErrorFmtMsgReturn(ERR_ROOT, "invalid query type: %d", config->clientData->queryType );
+    slReturn resp;
+    switch( clientData->queryType ) {
+
+        case fixQuery:     resp = doFixQuery(     clientData ); break;
+        case versionQuery: resp = doVersionQuery( clientData ); break;
+        case configQuery:  resp = doConfigQuery(  clientData ); break;
+        default: return makeErrorFmtMsgReturn(ERR_ROOT, "invalid query type: %d", clientData->queryType );
     }
     if( isErrorReturn( resp ) )
         return makeErrorMsgReturn(ERR_CAUSE( resp ), "problem executing GPS query" );
@@ -662,12 +680,19 @@ static slReturn  actionEcho(  const optionDef_slOptions* defs, const psloConfig*
             return makeErrorMsgReturn( ERR_CAUSE( rscResp ), "couldn't read character while echoing" );
         if( isWarningReturn( rscResp ) )
             continue;  // we timed out; just try again...
-        int c = (char)(uintptr_t) getReturnInfo( rscResp );
+        int c = getReturnInfoChar( rscResp );
         if( c >= 0 ) printf( "%c", c );
     }
 
     if( V2 ) printf( "\nEnding echo...\n" ); else printf( "\n" );
 
+    return makeOkReturn();
+}
+
+
+// Quiet action function, which simply sets verbosity to zero.
+static slReturn  actionQuiet(  const optionDef_slOptions* defs, const psloConfig* config ) {
+    config->clientData->verbosity = 0;
     return makeOkReturn();
 }
 
@@ -714,10 +739,20 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
 
 
     optionDef_slOptions verboseDef = {
-            3, "verbose", 'v', argNone,
+            2, "verbose", 'v', argNone,
             parseCount, (void*) &clientData->verbosity, 0,
+            constrainVerbosity,
             NULL,
             NULL,
+            "get verbose messages"
+    };
+
+
+    optionDef_slOptions quietDef = {
+            1, "quiet", 'q', argNone,
+            NULL, NULL, 0,
+            NULL,
+            actionQuiet,
             NULL,
             "get verbose messages"
     };
@@ -763,7 +798,7 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
     };
 
     optionDef_slOptions queryDef = {
-            1, "query", 'q', argRequired,
+            1, "query", 'Q', argRequired,
             parseQuery, NULL, 0,
             NULL,
             actionQuery,
@@ -791,14 +826,15 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
 
     optionDef_slOptions optionDefs[] = {
             verboseDef,
+            quietDef,
+            portDef,
+            jsonDef,
             autobaudDef,
             baudDef,
+            minBaudDef,
             syncDef,
             newbaudDef,
-            minBaudDef,
-            portDef,
             nmeaDef,
-            jsonDef,
             queryDef,
             echoDef,
             { 0 }
@@ -814,22 +850,24 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
 }
 
 static char* exampleText =
-            "Additional information:\n"
-            "   Query types:\n"
-            "      fix      returns position, altitude, and time information\n"
-            "      version  returns hardware and software version of the GPS\n"
-            "\n"
-            "Examples:\n"
-            "   gpsctl --port=/dev/serial1 --baud 9600 --echo=5\n"
-            "      Selects the serial port \"/dev/serial1\", sets the host serial port baud rate to 9600, and\n"
-            "      echoes any received characters (presumably NMEA data) to stdout.\n"
-            "   gpsctl -p /dev/serial1 -b 9600 -e=5\n"
-            "      Exactly the same as the preceding example, using short options.\n"
-            "\n"
-            "Yes or no values:\n"
-            "   Yes       indicated by an initial character of 'y', 'Y', 't', 'T', or '1'\n"
-            "   No        indicated by anything else\n"
-            "";
+    "Additional information:\n"
+    "\n"
+    "  Query types:\n"
+    "    fix      returns position, altitude, and time information\n"
+    "    version  returns hardware and software version of the GPS\n"
+    "    config   returns GPS configuration information\n"
+    "\n"
+    "  Yes or no values:\n"
+    "    yes      indicated by an initial character of 'y', 'Y', 't', 'T', or '1'\n"
+    "    no       indicated by anything else\n"
+    "\n"
+    "Examples:\n"
+    "   gpsctl --port=/dev/serial1 --baud 9600 --echo=5\n"
+    "      Selects the serial port \"/dev/serial1\", sets the host serial port baud rate to 9600, and\n"
+    "      echoes any received characters (presumably NMEA data) to stdout.\n"
+    "   gpsctl -p /dev/serial1 -b 9600 -e=5\n"
+    "      Exactly the same as the preceding example, using short options.\n"
+    "";
 
 
 // The entry point for gpsctl...
@@ -841,6 +879,7 @@ int main( int argc, char *argv[] ) {
     clientData.minBaud = 9600;
     clientData.port = "/dev/serial0";
     clientData.syncMethod = syncUBX;
+    clientData.verbosity = 1;
 
     psloConfig config = {
             getOptionDefs( &clientData ),                       // our command-line option definitions...

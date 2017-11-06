@@ -9,14 +9,6 @@
 #define _DARWIN_C_SOURCE
 #define _POSIX_C_SOURCE 199309L
 
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <string.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include "sl_general.h"
-#include "sl_buffer.h"
 #include "sl_bits.h"
 
 

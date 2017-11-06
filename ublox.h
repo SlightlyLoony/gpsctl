@@ -5,6 +5,18 @@
 #ifndef GPSCTL_UBLOX_H
 #define GPSCTL_UBLOX_H
 
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/termios.h>
+#include "sl_general.h"
+#include "sl_serial.h"
+#include "sl_buffer.h"
+#include "sl_bits.h"
 #include "sl_return.h"
 
 typedef enum ubxState    { Valid, NotValid, NotPresent } ubxState;

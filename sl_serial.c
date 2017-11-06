@@ -32,7 +32,7 @@ extern slReturn getSpeedInfo( int fdPort, speedInfo* result ) {
     slReturn brResp = getBaudRate((int) cfgetispeed( &options ));
     if( isErrorReturn( brResp ) )
         return makeErrorMsgReturn( ERR_CAUSE( brResp ), "could not get baud rate" );
-    result->baudRate = (int) getReturnInfo( brResp );
+    result->baudRate =  getReturnInfoInt32( brResp );
     result->nsBit = 1000000000 / result->baudRate;
     int stopBits = (options.c_cflag & CSTOPB) ? 2 : 1;
     int dataBits = (int) getBitField_slBits( options.c_cflag, CSIZE );
@@ -106,7 +106,7 @@ extern slReturn readSerialChar( int fdPort, long long msTimeout ) {
 
         // if we read a character, return it...
         if( rx_length == 1 )
-            return makeOkInfoReturn( (void*)(uintptr_t) c );
+            return makeOkInfoReturn( char2info(c) );
 
         // otherwise, we didn't read anything..
         // delay a half character time before we try again...
@@ -162,9 +162,18 @@ extern slReturn getBaudRate( int cookie ) {
 
     for( int i = 0; i < ARRAY_SIZE( validRates ); i++ ) {
         if( cookie == validRates[i].cookie )
-            return makeOkInfoReturn( (void*) validRates[i].baud );
+            return makeOkInfoReturn( int2info( validRates[i].baud ) );
     }
     return makeErrorFmtMsgReturn( ERR_ROOT, "unrecognized baud rate cookie: %d", cookie );
+}
+
+
+// Flush the receive buffer.
+extern slReturn flushRx( int fdPort ) {
+    int result = tcflush( fdPort, TCIFLUSH );
+    if( result < 0 )
+        return makeErrorFmtMsgReturn( ERR_ROOT, "error from tcflush(): %s", strerror(errno) );
+    return makeOkReturn();
 }
 
 
@@ -172,24 +181,24 @@ extern slReturn getBaudRate( int cookie ) {
 // received data after changing the rate.
 extern slReturn setTermOptionsBaud( int fdPort, int baud ) {
 
-    if( fdPort < 0 ) return makeErrorMsgReturn(ERR_ROOT, "Invalid serial port file descriptor" );
+    if( fdPort < 0 ) return makeErrorMsgReturn( ERR_ROOT, "Invalid serial port file descriptor" );
     int baudCookie = getBaudRateCookie( baud );
-    if( baudCookie < 0 ) return makeErrorMsgReturn(ERR_ROOT, "Invalid baud rate" );
+    if( baudCookie < 0 ) return makeErrorMsgReturn( ERR_ROOT, "Invalid baud rate" );
 
     struct termios options;
     int result;
     result = tcdrain( fdPort );
-    if( result < 0 ) return makeErrorFmtMsgReturn(ERR_ROOT, "error from tcdrain: %s", strerror(errno));
+    if( result < 0 ) return makeErrorFmtMsgReturn( ERR_ROOT, "error from tcdrain(): %s", strerror(errno) );
     result = tcgetattr( fdPort, &options );
-    if( result < 0 ) return makeErrorFmtMsgReturn(ERR_ROOT, "error from tcgetattr: %s", strerror(errno));
+    if( result < 0 ) return makeErrorFmtMsgReturn( ERR_ROOT, "error from tcgetattr(): %s", strerror(errno) );
     result = cfsetispeed( &options, (speed_t) baudCookie );
-    if( result < 0 ) return makeErrorFmtMsgReturn(ERR_ROOT, "error from cfsetispeed: %s", strerror(errno));
+    if( result < 0 ) return makeErrorFmtMsgReturn( ERR_ROOT, "error from cfsetispeed(): %s", strerror(errno) );
     result = cfsetospeed( &options, (speed_t) baudCookie );
-    if( result < 0 ) return makeErrorFmtMsgReturn(ERR_ROOT, "error from cfsetospeed: %s", strerror(errno));
+    if( result < 0 ) return makeErrorFmtMsgReturn( ERR_ROOT, "error from cfsetospeed(): %s", strerror(errno) );
     result = tcflush( fdPort, TCIFLUSH );
-    if( result < 0 ) return makeErrorFmtMsgReturn(ERR_ROOT, "error from tcflush: %s", strerror(errno));
+    if( result < 0 ) return makeErrorFmtMsgReturn( ERR_ROOT, "error from tcflush(): %s", strerror(errno) );
     result = tcsetattr( fdPort, TCSANOW, &options );
-    if( result < 0 ) return makeErrorFmtMsgReturn(ERR_ROOT, "error from tcsetattr: %s", strerror(errno));
+    if( result < 0 ) return makeErrorFmtMsgReturn( ERR_ROOT, "error from tcsetattr(): %s", strerror(errno) );
     return makeOkReturn();
 }
 
@@ -309,19 +318,19 @@ extern slReturn synchronize( int fdPort, baudRateSynchronizer synchronizer, int 
         if( isWarningReturn( rscResp ) )
             break;  // if we timed out...
 
-        int c = (char)(uintptr_t) getReturnInfo( rscResp );
+        int c = getReturnInfoChar( rscResp );
 
         // are we synchronized yet?
         if( verbosity >= 3 ) printf( "%c", c );
         if( synchronizer((char) c, &state )) {
             if( verbosity > 0 ) printf( "Synchronized at %d baud...\n", si.baudRate );
-            return makeOkInfoReturn( (void*) true );
+            return makeOkInfoReturn( bool2info( true ) );
         }
     }
     // we get here if we timed out...
     if( verbosity > 0 ) printf( "Timed out while attempting to synchronize at %d baud...\n", si.baudRate );
     synchronizer( -1, &state );  // close synchronizer...
-    return makeOkInfoReturn( (void*) false );
+    return makeOkInfoReturn( bool2info( false ) );
 }
 
 

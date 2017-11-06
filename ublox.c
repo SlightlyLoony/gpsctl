@@ -8,20 +8,14 @@
 #define _DARWIN_C_SOURCE
 #define _POSIX_C_SOURCE 199309L
 
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <string.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <stdint.h>
-#include <sys/termios.h>
-#include "sl_general.h"
 #include "ublox.h"
-#include "sl_serial.h"
-#include "sl_buffer.h"
-#include "sl_bits.h"
-#include "sl_return.h"
+
+// for best time pulse:
+//   - disable SBAS, IMES, and QZSS (UBX-CFG-GNSS)
+//   - stationary mode (UBX-CFG-NAV5)
+//   - calibrate antenna delay (UBX-CFG-TP5)
+//   - set measurement rate (UBX-CFG-RATE) and time pulse frequency (UBX-CFG-TP5) to 1Hz
+//   - set UTC variant to GPS (UBX-CFG-NAV5)
 
 
 #define UBX_ACK      0x05
@@ -102,7 +96,7 @@ static slReturn readUbxBytes( int fdPort, byte *buffer, int *count, size_t max, 
         if( isWarningReturn( rscResp ) )
             makeErrorMsgReturn( ERR_ROOT, "timed out while trying to read UBX message" );
 
-        int c = (char)(uintptr_t) getReturnInfo( rscResp );
+        int c = getReturnInfoChar( rscResp );
         if( c >= 0 ) {
             buffer[*count] = (byte) c;
             (*count)++;
@@ -113,7 +107,7 @@ static slReturn readUbxBytes( int fdPort, byte *buffer, int *count, size_t max, 
 
 
 // Waits up to one second for a UBX message to be received.
-// The body (an slBuffer) is only allocated if the message returned Valid.
+// The body (an slBuffer) is only allocated if returns Ok.
 #define UBX_SYNC1 (0xB5)
 #define UBX_SYNC2 (0x62)
 static slReturn rcvUbxMsg( int fdPort, ubxMsg* msg ) {
@@ -136,7 +130,7 @@ static slReturn rcvUbxMsg( int fdPort, ubxMsg* msg ) {
             if( isWarningReturn( rscResp ) )
                 break;  // if we timed out...
 
-            int c= (char)(uintptr_t) getReturnInfo( rscResp );
+            int c= getReturnInfoChar( rscResp );
             if( c >= 0 ) {
                 if ((count == 0) && (c == UBX_SYNC1)) {
                     count++;
@@ -181,7 +175,7 @@ static slReturn rcvUbxMsg( int fdPort, ubxMsg* msg ) {
                 return makeErrorMsgReturn( ERR_CAUSE( rubResp ), "couldn't read serial characters while receiving UBX message" );
             if( count >= 2 ) {
                 if( (buff[0] == msg->checksum.ck_a) && (buff[1] == msg->checksum.ck_b) )
-                    return makeOkInfoReturn( (void*) msg );
+                    return makeOkReturn();
                 else {
                     free( msg->body );
                     return makeErrorMsgReturn(ERR_ROOT, "UBX received message with checksum error" );
@@ -438,15 +432,15 @@ extern slReturn getConfig(int fdPort, int verbosity, ubxConfig* config ) {
     return result;
 }
 
-// for best time pulse:
-//   - disable SBAS, IMES, and QZSS (UBX-CFG-GNSS)
-//   - stationary mode (UBX-CFG-NAV5)
-//   - calibrate antenna delay (UBX-CFG-TP5)
-//   - set measurement rate (UBX-CFG-RATE) and time pulse frequency (UBX-CFG-TP5) to 1Hz
-//   - set UTC variant to GPS (UBX-CFG-NAV5)
 
-
+// Returns Ok if there were no errors, and errors otherwise.  Note that this function
+// should be called prior to any series of UBX operations to ensure the UART receiver is synced to the data stream.
 extern slReturn ubxSynchronize( const int fdPort, const int verbosity ) {
+
+    // flush any junk we might have in the receiver buffer...
+    slReturn frResp = flushRx( fdPort );
+    if( isErrorReturn( frResp ) )
+        makeErrorMsgReturn( ERR_CAUSE( frResp ), "could not flush receiver prior to synchronization" );
 
     // we're gonna try this up to 10 times...
     for( int i = 0; i < 10; i++ ) {
@@ -456,10 +450,10 @@ extern slReturn ubxSynchronize( const int fdPort, const int verbosity ) {
         ubxMsg msg = createUbxMsg(type, body);
         ubxMsg ans;
         slReturn result = pollUbx( fdPort, msg, &ans );
-        if ( isOkReturn( result ) ) return makeOkInfoReturn( (void*)(uintptr_t) true );
+        if ( isOkReturn( result ) ) return makeOkReturn();
         if( verbosity >= 3 ) printf( "." );  // just to show how many attempts it took to get synchronized...
     }
-    return makeOkInfoReturn( (void*)(uintptr_t) false );
+    return makeErrorMsgReturn( ERR_ROOT, "could not synchronize to UBX data" );
 }
 
 
@@ -473,7 +467,7 @@ static slReturn isNmeaOn( int fdPort ) {
     slReturn resp = pollUbx( fdPort, poll, &current );
     if( isErrorReturn( resp ) ) return resp;
 
-    int state =  isBitSet_slBits( get_uint16_slBuffer( current.body, 14 ), 1 ) ? 1 : 0;
+    bool state =  isBitSet_slBits( get_uint16_slBuffer( current.body, 14 ), 1 ) ? 1 : 0;
     return makeOkInfoReturn( (void*) state );
 }
 
@@ -489,7 +483,7 @@ extern slReturn setNMEAData( int fdPort, int verbosity, bool nmeaOn ) {
     if( isErrorReturn( cn ) ) return cn;
 
     // extract our state information...
-    bool currentState = (bool) getReturnInfo( cn );
+    bool currentState = getReturnInfoBool( cn );
 
     // if we're already in the state we want, just leave...
     if( currentState == nmeaOn ) {
@@ -534,7 +528,7 @@ extern slReturn changeBaudRate( int fdPort, unsigned int newBaudRate, int verbos
     // if NMEA data is on, turn it off and remember...
     slReturn nmeaResp = isNmeaOn( fdPort );
     if( isErrorReturn( nmeaResp ) ) return makeErrorMsgReturn(ERR_CAUSE( nmeaResp ), "Could not determine if NMEA data was turned on" );
-    bool nmeaOn = (bool) getReturnInfo( nmeaResp );
+    bool nmeaOn = getReturnInfoBool( nmeaResp );
     if( nmeaOn ) {
         if( verbosity ) printf( "NMEA data is turned on, so turning it off...\n" );
 

@@ -6,6 +6,7 @@
 #define GPSCTL_SL_BITS_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 uint64_t getBitField_slBits( uint64_t value, uint64_t mask );
 bool isBitSet_slBits( uint64_t value, int bitNum );

@@ -24,6 +24,7 @@ slReturn verifySerialDevice( const char *deviceName );
 slReturn readSerialChar( int fdPort, long long msTimeout );
 slReturn getBaudRate( int cookie );
 slReturn synchronize( int fdPort, baudRateSynchronizer, int );
+slReturn flushRx( int fdPort );
 slReturn setTermOptions( int fdPort, int baud, int dataBits, int stopBits, bool parityEnable, bool odd );
 slReturn setTermOptionsBaud( int fdPort, int baud );
 

@@ -286,7 +286,7 @@ static const procOptionRecord *optRecIterator( optRecIteratorState *itState, con
 static slReturn helpAction( const optionDef_slOptions *defs, const psloConfig *config ) {
 
     // print a nice header...
-    printf( "Help with %s options:\n\n", config->name );
+    printf( "Options for %s:\n\n", config->name );
 
     // iterate over all the option definitions to find out how wide the widest name/argument is..
     int maxWidth = 0;
@@ -344,8 +344,8 @@ static slReturn helpAction( const optionDef_slOptions *defs, const psloConfig *c
 
     // now we put our trailing arguments explanation out...
     if( gotOptArg || gotReqArg ) printf( "\n" );
-    if( gotReqArg ) printf( "Arguments in <angle brackets> are required; they MUST be supplied.\n" );
-    if( gotOptArg ) printf( "Arguments in [square brackets] are optional; they may be omitted.\n" );
+    if( gotReqArg ) printf( "  Arguments in <angle brackets> are required; they MUST be supplied.\n" );
+    if( gotOptArg ) printf( "  Arguments in [square brackets] are optional; they may be omitted.\n" );
 
     // if we were given additional info text, print it...
     if( config->addedInfo != NULL) {
