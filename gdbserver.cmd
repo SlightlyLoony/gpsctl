@@ -1,1 +1,1 @@
-nohup gdbserver :1234 ./gpsctl/gpsctl  --query config  > ~/gpsctl/gpsctl.out 2>&1 &
+nohup gdbserver :1234 ./gpsctl/gpsctl  --query config -j  > ~/gpsctl/gpsctl.out 2>&1 &

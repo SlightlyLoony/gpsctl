@@ -1,1 +1,1 @@
- --query config
+ --query config -j

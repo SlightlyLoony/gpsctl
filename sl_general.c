@@ -11,6 +11,11 @@
 #include "sl_general.h"
 
 
+// Returns "yes" or "no" for the given true or false.
+extern char* yesNo( const bool yesno ) {
+    return yesno ? "yes" : "no";
+}
+
 // Dumps a stack trace to stderr.
 extern void stackDump( void ) {
     #define STACK_DUMP_SIZE 250

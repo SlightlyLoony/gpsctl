@@ -25,6 +25,8 @@ typedef enum Endiness { BigEndian, LittleEndian } Endiness;
 
 typedef unsigned char byte;
 
+char* yesNo( const bool yesno );
+
 void stackDump( void );
 
 void *safeMalloc( size_t size );

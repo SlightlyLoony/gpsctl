@@ -27,13 +27,13 @@
 #define UBX_CFG_NAV5 0x24
 #define UBX_CFG_GNSS 0x3E
 #define UBX_CFG_TP5  0x31
+#define UBX_CFG_PMS  0x86
+#define UBX_CFG_RATE 0x08
 #define UBX_CFG_CFG  0x09
 #define UBX_MON      0x0A
 #define UBX_MON_VER  0x04
 #define UBX_NAV      0x01
 #define UBX_NAV_PVT  0x07
-
-#define UBX_CFG_PRT_UART_ID = 0x01
 
 #define NAV_PVT_MAX_MS      2000
 #define CFG_NAV5_MAX_MS     2000
@@ -43,6 +43,8 @@
 #define CFG_ANT_MAX_MS      1000
 #define CFG_PRT_MAX_MS      1000
 #define CFG_TP5_MAX_MS      1000
+#define CFG_RATE_MAX_MS     1000
+#define CFG_PMS_MAX_MS      1000
 
 
 static ubxType ut_ACK_NAK = { UBX_ACK, UBX_ACK_NAK };
@@ -355,7 +357,7 @@ static void correctTime( ubxFix *fix ) {
 
 
 // Fills the fix structure at the given pointer with information about a time and position fix obtained from the
-// GPS system.  Returns the appropriate reportResponse value.
+// GPS system.
 #define NAV_PVT_BODY_SIZE 92
 extern slReturn ubxGetFix( int fdPort, int verbosity, ubxFix* fix ) {
 
@@ -400,8 +402,7 @@ extern slReturn ubxGetFix( int fdPort, int verbosity, ubxFix* fix ) {
 }
 
 
-// Fills the ubxVersion structure at the given pointer with information about the GPS's version.  Returns the
-// appropriate reportResponse value.
+// Fills the ubxVersion structure at the given pointer with information about the GPS's version.
 extern slReturn ubxGetVersion( int fdPort, int verbosity, ubxVersion* version ) {
 
     ubxType type = { UBX_MON, UBX_MON_VER };
@@ -436,8 +437,97 @@ extern slReturn ubxGetVersion( int fdPort, int verbosity, ubxVersion* version ) 
 }
 
 
+extern char* getGnssName( gnssID id ) {
+    switch( id ) {
+        case GPS:     return "GPS";
+        case SBAS:    return "SBAS";
+        case Galileo: return "Galileo";
+        case BeiDou:  return "BeiDou";
+        case IMES:    return "IMES";
+        case QZSS:    return "QZSS";
+        case GLONASS: return "GLONASS";
+        default:      return "unknown";
+    }
+}
+
+
+extern char* getDynamicModelName( dynModel model ) {
+    switch( model ) {
+        case Portable:   return "Portable";
+        case Stationary: return "Stationary";
+        case Pedestrian: return "Pedestrian";
+        case Automotive: return "Automotive";
+        case Sea:        return "Sea";
+        case Air1G:      return "Air (less than 1G acceleration)";
+        case Air2G:      return "Air (less than 2G acceleration)";
+        case Air4G:      return "Air (less than 4G acceleration)";
+        case Watch:      return "Watch";
+        default:         return "unknown";
+    }
+}
+
+
+extern char* getFixModeName( fixMode mode ) {
+    switch( mode ) {
+        case Only2D:   return "2D only";
+        case Only3D:   return "3D only";
+        case Auto2D3D: return "Auto 2D/3D";
+        default:       return "unknown";
+    }
+}
+
+
+extern char* getUTCTypeName( utcType utc ) {
+    switch( utc ) {
+        case AutoUTC:     return "Auto";
+        case USNO_UTC:    return "USNO";
+        case GLONASS_UTC: return "GLONASS";
+        case BeiDou_UTC:  return "BeiDou";
+        default:          return "unknown";
+    }
+}
+
+
+extern char* getFixTimeRefName( fixTimeRefType type ) {
+    switch( type ) {
+        case fixUTC:     return "UTC";
+        case fixGPS:     return "GPS";
+        case fixGLONASS: return "GLONASS";
+        case fixBeiDou:  return "BeiDou";
+        case fixGalileo: return "Galileo";
+        default:         return "unknown";
+    }
+}
+
+
+extern char* getPowerModeName( powerModeType type ) {
+    switch( type ) {
+        case pmFull:          return "Full";
+        case pmBalanced:      return "Balanced";
+        case pmInterval:      return "Interval";
+        case pmAggressive1Hz: return "Aggressive (1 Hz)";
+        case pmAggressive2Hz: return "Aggressive (2 Hz)";
+        case pmAggressive4Hz: return "Aggressive (3 Hz)";
+        case pmInvalid:       return "Invalid";
+        default:              return "unknown";
+    }
+}
+
+
 // Fills the ubxVersion structure at the given pointer with information about the GPS's version.  Returns the
 // appropriate reportResponse value.
+extern char* getTimeGridTypeName( timegridType type ) {
+    switch( type ) {
+        case tgUTC: return "UTC";
+        case tgGPS: return "GPS";
+        case tgGLONASS: return "GLONASS";
+        case tgBeiDou: return "BeiDou";
+        case tgGalileo: return "Galileo";
+        default: return "unknown";
+    }
+}
+
+// Fills the ubxConfig structure at the given pointer with information about the GPS's configuration.
 extern slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config ) {
 
     // get the antenna configuration...
@@ -507,15 +597,58 @@ extern slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config ) {
     // get the time pulse configuration...
     ubxType tp5Type = { UBX_CFG, UBX_CFG_TP5 };
     body = create_slBuffer( 1, LittleEndian );
-    *buffer_slBuffer( body ) = 1;
+    *buffer_slBuffer( body ) = 0;  // we only look at time pulse zero...
     msg = createUbxMsg( tp5Type, body );
     ubxMsg tp5Msg;
     slReturn tp5Resp = pollUbx( fdPort, msg, CFG_TP5_MAX_MS, &tp5Msg );
     if( isErrorReturn( tp5Resp ) )
         return makeErrorMsgReturn( ERR_CAUSE( antResp ), "problem getting time pulse information from GPS" );
+    config->antCableDelayNs   = get_int16_slBuffer(  tp5Msg.body,  4 );
+    config->rfGroupDelayNs    = get_int16_slBuffer(  tp5Msg.body,  6 );
+    config->freqPeriod        = get_uint32_slBuffer( tp5Msg.body,  8 );
+    config->freqPeriodLock    = get_uint32_slBuffer( tp5Msg.body, 12 );
+    config->pulseLenRatio     = get_uint32_slBuffer( tp5Msg.body, 16 );
+    config->pulseLenRatioLock = get_uint32_slBuffer( tp5Msg.body, 20 );
+    config->userConfigDelay   = get_int32_slBuffer(  tp5Msg.body, 24 );
+    uint32_t flags            = get_uint32_slBuffer( tp5Msg.body, 28 );
+    config->timePulse0Enabled = isBitSet_slBits( flags, 0 );
+    config->lockGpsFreq      = isBitSet_slBits( flags, 1 );
+    config->lockedOtherSet    = isBitSet_slBits( flags, 2 );
+    config->isFreq            = isBitSet_slBits( flags, 3 );
+    config->isLength          = isBitSet_slBits( flags, 4 );
+    config->alignToTow        = isBitSet_slBits( flags, 5 );
+    config->polarity          = isBitSet_slBits( flags, 6 );
+    config->gridUtcTnss       = (timegridType) getBitField_slBits( flags, 0x000000780 );
     free( body );
     free( tp5Msg.body );
 
+    // get the fix rate configuration...
+    ubxType rateType = { UBX_CFG, UBX_CFG_RATE };
+    body = create_slBuffer( 0, LittleEndian );
+    msg = createUbxMsg( rateType, body );
+    ubxMsg rateMsg;
+    slReturn rateResp = pollUbx( fdPort, msg, CFG_RATE_MAX_MS, &rateMsg );
+    if( isErrorReturn( rateResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( antResp ), "problem getting fix rate information from GPS" );
+    config->measRateMs =                  get_uint16_slBuffer( rateMsg.body, 0 );
+    config->navRate    =                  get_uint16_slBuffer( rateMsg.body, 2 );
+    config->timeRef    = (fixTimeRefType) get_uint16_slBuffer( rateMsg.body, 4 );
+    free( body );
+    free( rateMsg.body );
+
+    // get the power mode configuration...
+    ubxType pmsType = { UBX_CFG, UBX_CFG_PMS };
+    body = create_slBuffer( 0, LittleEndian );
+    msg = createUbxMsg( pmsType, body );
+    ubxMsg pmsMsg;
+    slReturn pmsResp = pollUbx( fdPort, msg, CFG_PMS_MAX_MS, &pmsMsg );
+    if( isErrorReturn( pmsResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( antResp ), "problem getting power mode information from GPS" );
+    config->powerSetup        = (powerModeType) get_uint8_slBuffer(  pmsMsg.body, 1 );
+    config->powerIntervalSecs =                 get_uint16_slBuffer( pmsMsg.body, 2 );
+    config->powerOnTimeSecs   =                 get_uint16_slBuffer( pmsMsg.body, 4 );
+    free( body );
+    free( pmsMsg.body );
 
     return makeOkReturn();
 }
@@ -600,7 +733,7 @@ extern slReturn ubxSetNMEAData( int fdPort, int verbosity, bool nmeaOn ) {
 
     // change the configuration to the way we want it, starting with polling it again...
     if( verbosity >= 3 ) printf( "Polling GPS UART configuration...\n" );
-    ubxMsg poll = createUbxMsg( ut_CFG_PRT, init_slBuffer( LittleEndian, 1 /* UBX_CFG_PRT_UART_ID */ ) );
+    ubxMsg poll = createUbxMsg( ut_CFG_PRT, init_slBuffer( LittleEndian, 1 ) );  // UART is index 1; defines won't work here...
     ubxMsg current;
     slReturn resp = pollUbx( fdPort, poll, CFG_PRT_MAX_MS, &current );
     if( isErrorReturn( resp ) ) return resp;

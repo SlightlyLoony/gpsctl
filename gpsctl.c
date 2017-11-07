@@ -224,12 +224,11 @@ static slReturn doFixQuery( const clientData_slOptions* clientData ) {
         return makeErrorMsgReturn( ERR_CAUSE( result ), "Problem obtaining fix from GPS" );
 
     if( clientData->json ) {
-        cJSON *root;
-        cJSON *objFix;
-        cJSON *time;
-        root = cJSON_CreateObject();
+        cJSON* root   = cJSON_CreateObject();
+        cJSON* objFix = cJSON_CreateObject();
+        cJSON* time   = cJSON_CreateObject();
 
-        cJSON_AddItemToObject( root, "fix", objFix = cJSON_CreateObject() );
+        cJSON_AddItemToObject( root, "fix", objFix );
         cJSON_AddNumberToObject( objFix, "latitude_deg", fix.latitude_deg );
         cJSON_AddNumberToObject( objFix, "longitude_deg", fix.longitude_deg );
         cJSON_AddNumberToObject( objFix, "height_above_ellipsoid_mm", fix.height_above_ellipsoid_mm );
@@ -240,12 +239,12 @@ static slReturn doFixQuery( const clientData_slOptions* clientData ) {
         cJSON_AddNumberToObject( objFix, "ground_speed_accuracy_mm_sec", fix.ground_speed_accuracy_mm_s );
         cJSON_AddNumberToObject( objFix, "heading_deg", fix.heading_deg );
         cJSON_AddNumberToObject( objFix, "heading_accuracy_deg", fix.heading_accuracy_deg );
-        cJSON_AddBoolToObject( objFix, "valid", fix.fix_valid );
-        cJSON_AddBoolToObject( objFix, "3d", fix.fix_is_3d );
+        cJSON_AddBoolToObject(   objFix, "valid", fix.fix_valid );
+        cJSON_AddBoolToObject(   objFix, "3d", fix.fix_is_3d );
 
-        cJSON_AddNumberToObject( root, "number_of_satellites_used", fix.number_of_satellites_used );
+        cJSON_AddNumberToObject( root,   "number_of_satellites_used", fix.number_of_satellites_used );
 
-        cJSON_AddItemToObject( root, "time", time = cJSON_CreateObject() );
+        cJSON_AddItemToObject(   root, "time", time );
         cJSON_AddNumberToObject( time, "month", fix.month );
         cJSON_AddNumberToObject( time, "day", fix.day );
         cJSON_AddNumberToObject( time, "year", fix.year );
@@ -253,8 +252,8 @@ static slReturn doFixQuery( const clientData_slOptions* clientData ) {
         cJSON_AddNumberToObject( time, "minute", fix.minute );
         cJSON_AddNumberToObject( time, "second", fix.second );
         cJSON_AddNumberToObject( time, "accuracy_ns", fix.time_accuracy_ns );
-        cJSON_AddBoolToObject( time, "valid", fix.time_valid );
-        cJSON_AddBoolToObject( time, "resolved", fix.time_resolved );
+        cJSON_AddBoolToObject(   time, "valid", fix.time_valid );
+        cJSON_AddBoolToObject(   time, "resolved", fix.time_resolved );
 
         char *jsonStr = cJSON_PrintUnformatted( root );
         printf( "%s\n", jsonStr );
@@ -297,8 +296,7 @@ static slReturn doVersionQuery( const clientData_slOptions* clientData ) {
 
     if( clientData->json ) {
 
-        cJSON *root;
-        root = cJSON_CreateObject();
+        cJSON *root = cJSON_CreateObject();
         cJSON_AddItemToObject( root, "software_version", cJSON_CreateString( version.software ) );
         cJSON_AddItemToObject( root, "hardware_version", cJSON_CreateString( version.hardware ) );
         cJSON_AddItemToObject( root, "extensions",
@@ -335,30 +333,154 @@ static slReturn doConfigQuery( const clientData_slOptions* clientData ) {
         return makeErrorMsgReturn(ERR_CAUSE( result ), "Problem obtaining configuration information from GPS" );
 
     if( clientData->json ) {
-//
-//        cJSON *root;
-//        root = cJSON_CreateObject();
-//        cJSON_AddItemToObject( root, "software_version", cJSON_CreateString( version.software ) );
-//        cJSON_AddItemToObject( root, "hardware_version", cJSON_CreateString( version.hardware ) );
-//        cJSON_AddItemToObject( root, "extensions",
-//                               cJSON_CreateStringArray( (const char**) version.extensions, version.number_of_extensions ) );
-//
-//        char *jsonStr = cJSON_PrintUnformatted( root );
-//        printf( "%s\n", jsonStr );
-//
-//        cJSON_Delete( root );
+
+        cJSON* root     = cJSON_CreateObject();
+        cJSON* ant      = cJSON_CreateObject();
+        cJSON* gnss     = cJSON_CreateObject();
+        cJSON* gnssRecs = cJSON_CreateArray();
+        cJSON* nav      = cJSON_CreateObject();
+        cJSON* time     = cJSON_CreateObject();
+        cJSON* rate     = cJSON_CreateObject();
+        cJSON* pwr      = cJSON_CreateObject();
+        cJSON_AddItemToObject( root, "antenna",    ant  );
+        cJSON_AddItemToObject( root, "GNSS",       gnss );
+        cJSON_AddItemToObject( gnss, "GNSS_records", gnssRecs );
+        cJSON_AddItemToObject( root, "navigation", nav  );
+        cJSON_AddItemToObject( root, "time_pulse", time );
+        cJSON_AddItemToObject( root, "fix_rate",   rate );
+        cJSON_AddItemToObject( root, "power_mode", pwr  );
+
+        cJSON_AddBoolToObject( ant, "power_on", config.antPwr );
+        cJSON_AddBoolToObject( ant, "short_detection", config.antShrtDet );
+        cJSON_AddBoolToObject( ant, "open_detection", config.antOpenDet );
+        cJSON_AddBoolToObject( ant, "power_down_on_short", config.antPwrDwnOnShrt );
+        cJSON_AddBoolToObject( ant, "auto_recover_from_short", config.antAutoRec );
+
+        cJSON_AddNumberToObject( gnss, "number_of_tracking_channels", config.trkChnnls );
+        for( int i = 0; i < config.gnssRecs; i++ ) {
+            cJSON* gnssRec = cJSON_CreateObject();
+            cJSON_AddStringToObject( gnssRec, "name", getGnssName( config.gnss[i].id ) );
+            cJSON_AddBoolToObject( gnssRec, "enabled", config.gnss[i].enabled );
+            cJSON_AddNumberToObject( gnssRec, "min_channels", config.gnss[i].minChnnls );
+            cJSON_AddNumberToObject( gnssRec, "max_channels", config.gnss[i].maxChnnls );
+            cJSON_AddItemToArray( gnssRecs, gnssRec );
+        }
+
+        cJSON_AddStringToObject( nav, "dynamic_model", getDynamicModelName( config.model ) );
+        cJSON_AddStringToObject( nav, "fix_mode", getFixModeName( config.mode ) );
+        cJSON_AddNumberToObject( nav, "fixed_altitude_2D_meters", config.fixedAltM );
+        cJSON_AddNumberToObject( nav, "fixed_altitude_2D_variance_m2", config.fixedAltVarM2 );
+        cJSON_AddNumberToObject( nav, "position_dop_mask", config.pDoP );
+        cJSON_AddNumberToObject( nav, "time_dop_mask", config.tDoP );
+        cJSON_AddNumberToObject( nav, "position_accuracy_mask", config.pAccM );
+        cJSON_AddNumberToObject( nav, "time_accuracy_mask", config.tAccM );
+        cJSON_AddNumberToObject( nav, "static_hold_threshold_cms", config.staticHoldThreshCmS );
+        cJSON_AddNumberToObject( nav, "dgnss_timeout_secs", config.dgnssTimeoutS );
+        cJSON_AddNumberToObject( nav, "threshold_satellites_above_cno", config.cnoThreshNumSVs );
+        cJSON_AddNumberToObject( nav, "cno_threshold_dbhz", config.cnoThreshDbHz );
+        cJSON_AddNumberToObject( nav, "static_hold_max_distance_meters", config.staticHoldMaxDistM );
+        cJSON_AddStringToObject( nav, "utc_standard", getUTCTypeName( config.utcStandard ) );
+
+        cJSON_AddBoolToObject( time, "enabled", config.timePulse0Enabled );
+        cJSON_AddBoolToObject( time, "is_freq", config.isFreq );
+        cJSON_AddBoolToObject( time, "is_length", config.isLength );
+        cJSON_AddBoolToObject( time, "lock_on_gps_freq", config.lockGpsFreq );
+        cJSON_AddBoolToObject( time, "locked_other_set", config.lockedOtherSet );
+        cJSON_AddBoolToObject( time, "align_to_top_of_second", config.alignToTow );
+        cJSON_AddBoolToObject( time, "polarity_rising_edge", config.polarity );
+        cJSON_AddStringToObject( time, "time_grid", getTimeGridTypeName( config.gridUtcTnss ) );
+        cJSON_AddNumberToObject( time, "antenna_cable_delay_ns", config.antCableDelayNs );
+        cJSON_AddNumberToObject( time, "rf_group_delay_ns", config.rfGroupDelayNs );
+        cJSON_AddNumberToObject( time, "user_configured_delay_ns", config.userConfigDelay );
+        cJSON_AddNumberToObject( time, "freq_period_lock", config.freqPeriodLock * (config.isFreq ? 1 : 0.000001) );
+        cJSON_AddNumberToObject( time, "freq_period", config.freqPeriod * (config.isFreq ? 1 : 0.000001) );
+        cJSON_AddNumberToObject( time, "pulse_length_ratio_lock", config.pulseLenRatioLock * (config.isLength ? 0.000001 : 0.000000023283064) );
+        cJSON_AddNumberToObject( time, "pulse_length_ratio", config.pulseLenRatio * (config.isLength ? 0.000001 : 0.000000023283064) );
+
+        cJSON_AddNumberToObject( rate, "measurement_rate_ms", config.measRateMs );
+        cJSON_AddNumberToObject( rate, "measurements_per_fix", config.navRate );
+        cJSON_AddStringToObject( rate, "time_reference", getFixTimeRefName( config.timeRef ) );
+
+        cJSON_AddStringToObject( pwr, "power_setup", getPowerModeName( config.powerSetup ) );
+        cJSON_AddNumberToObject( pwr, "period_secs_for_interval", config.powerIntervalSecs );
+        cJSON_AddNumberToObject( pwr, "on_time_secs_for_interval", config.powerOnTimeSecs );
+
+        char *jsonStr = cJSON_PrintUnformatted( root );
+        printf( "%s\n", jsonStr );
+
+        cJSON_Delete( root );
     }
     else {
-//        printf( "Software version: %s\n", version.software );
-//        free( version.software );
-//        printf( "Hardware version: %s\n", version.hardware );
-//        free( version.hardware );
-//        char **ptr = version.extensions;
-//        while( (*ptr) != NULL ) {
-//            printf( "       Extension: %s\n", *ptr );
-//            free( (*ptr) );
-//            ptr++;
-//        }
+        printf( "U-Blox GPS configuration\n" );
+
+        printf( "  Antenna:\n" );
+        printf( "    Power enabled:            %s\n", yesNo( config.antPwr          ) );
+        printf( "    Short detection:          %s\n", yesNo( config.antShrtDet      ) );
+        printf( "    Open detection:           %s\n", yesNo( config.antOpenDet      ) );
+        printf( "    Power down on short:      %s\n", yesNo( config.antPwrDwnOnShrt ) );
+        printf( "    Auto recovery from short: %s\n", yesNo( config.antAutoRec      ) );
+
+        printf( "  GNSS:\n" );
+        printf( "    Tracking channels:  %d\n", config.trkChnnls  );
+        for( int i = 0; i < config.gnssRecs; i++ ) {
+            printf( "    Type: %s\n", getGnssName( config.gnss[i].id ) );
+            printf( "      Enabled:          %s\n", yesNo( config.gnss[i].enabled ) );
+            printf( "      Minimum channels: %d\n", config.gnss[i].minChnnls );
+            printf( "      Maximum channels: %d\n", config.gnss[i].maxChnnls );
+        }
+
+        printf( "  Navigation engine:\n" );
+        printf( "    Dynamic model:                %s\n", getDynamicModelName( config.model )             );
+        printf( "    Fix mode:                     %s\n", getFixModeName(      config.mode )              );
+        printf( "    Fixed altitude (2D):          %.2f meters\n",             config.fixedAltM           );
+        printf( "    Fixed altitude variance (2D): %.4f meters^2\n",           config.fixedAltVarM2           );
+        printf( "    Position DoP mask:            %.1f\n",                    config.pDoP                );
+        printf( "    Time DoP mask:                %.1f\n",                    config.tDoP                );
+        printf( "    Position accuracy mask:       %d meters\n",               config.pAccM               );
+        printf( "    Time accuracy mask:           %d meters\n",               config.tAccM               );
+        printf( "    Static hold threshold:        %d cm/s\n",                 config.staticHoldThreshCmS );
+        printf( "    Dynamic GNSS timeout:         %d seconds\n",              config.dgnssTimeoutS       );
+        printf( "    Threshold above C/No:         %d satellites\n",           config.cnoThreshNumSVs     );
+        printf( "    C/No threshold:               %d dBHz\n",                 config.cnoThreshDbHz       );
+        printf( "    Static hold max distance:     %d meters\n",               config.staticHoldMaxDistM  );
+        printf( "    UTC standard:                 %s\n", getUTCTypeName(      config.utcStandard )       );
+
+        printf( "  Time pulse:\n" );
+        printf( "    Time pulse 0 enabled:         %s\n", yesNo(               config.timePulse0Enabled ) );
+        printf( "    Use frequency vs. period:     %s\n", yesNo(               config.isFreq )            );
+        printf( "    Use length vs. duty cycle:    %s\n", yesNo(               config.isLength )          );
+        printf( "    Lock on GPS frequency:        %s\n", yesNo(               config.lockGpsFreq )       );
+        printf( "    LockUseOtherSet:              %s\n", yesNo(               config.lockedOtherSet )    );
+        printf( "    Align to top of second:       %s\n", yesNo(               config.alignToTow )        );
+        printf( "    Polarity rising edge:         %s\n", yesNo(               config.polarity )          );
+        printf( "    Time grid:                    %s\n", getTimeGridTypeName( config.gridUtcTnss )       );
+        printf( "    Antenna cable delay:          %d nanoseconds\n",          config.antCableDelayNs     );
+        printf( "    RF group delay:               %d nanoseconds\n",          config.rfGroupDelayNs      );
+        if( config.isFreq ) {
+            printf( "    Locked pulse frequency:       %d Hz\n",               config.freqPeriodLock      );
+            printf( "    Unlocked pulse frequency:     %d Hz\n",               config.freqPeriod          );
+        } else {
+            printf( "    Locked pulse period:          %d microseconds\n",     config.freqPeriodLock      );
+            printf( "    Unlocked pulse period:        %d microseconds\n",     config.freqPeriod          );
+        }
+        if( config.isLength ) {
+            printf( "    Locked pulse length:          %d microseconds\n",     config.pulseLenRatioLock   );
+            printf( "    Unlocked pulse length:        %d microseconds\n",     config.pulseLenRatio       );
+        } else {
+            printf( "    Locked pulse duty cycle:      %.2f%%\n",              config.pulseLenRatioLock * 0.000000023283064 );
+            printf( "    Unlocked pulse duty cycle:    %.2f%%\n",              config.pulseLenRatio * 0.000000023283064 );
+        }
+        printf( "    User configurable delay:      %d nanoseconds\n",          config.userConfigDelay     );
+
+        printf( "  Fix rate:\n" );
+        printf( "    Measurement rate:                 %d milliseconds\n",         config.measRateMs          );
+        printf( "    Measurements per fix:             %d\n",                      config.navRate             );
+        printf( "    Time reference:                   %s\n", getFixTimeRefName(   config.timeRef )           );
+
+        printf( "  Power mode:\n" );
+        printf( "    Power setup:                      %s\n", getPowerModeName(    config.powerSetup )        );
+        printf( "    Period (if interval):             %d seconds\n",              config.powerIntervalSecs   );
+        printf( "    On time (if interval):            %d seconds\n",              config.powerOnTimeSecs     );
     }
 
     return makeOkReturn();

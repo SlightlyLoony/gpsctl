@@ -69,7 +69,10 @@ typedef struct {
 typedef enum { GPS, SBAS, Galileo, BeiDou, IMES, QZSS, GLONASS } gnssID;
 typedef enum { Portable, Stationary = 2, Pedestrian, Automotive, Sea, Air1G, Air2G, Air4G, Watch } dynModel;
 typedef enum { Only2D = 1, Only3D, Auto2D3D } fixMode;
-typedef enum { AutoUTC, USNO_UTC = 3, GLONASS_UTC = 6, BEIDOU_UTC } utcType;
+typedef enum { AutoUTC, USNO_UTC = 3, GLONASS_UTC = 6, BeiDou_UTC } utcType;
+typedef enum { tgUTC, tgGPS, tgGLONASS, tgBeiDou, tgGalileo } timegridType;
+typedef enum { fixUTC, fixGPS, fixGLONASS, fixBeiDou, fixGalileo } fixTimeRefType;
+typedef enum { pmFull, pmBalanced, pmInterval, pmAggressive1Hz, pmAggressive2Hz, pmAggressive4Hz, pmInvalid=0xFF } powerModeType;
 typedef struct {
     gnssID id;
     int minChnnls;
@@ -102,7 +105,36 @@ typedef struct {
     uint8_t        cnoThreshDbHz;           // C/NO threshold for deciding whether to attempt a fix
     uint16_t       staticHoldMaxDistM;      // static hold distance threshold (before quitting static hold)
     utcType        utcStandard;             // UTC standard used
+    int16_t        antCableDelayNs;         // antenna cable delay in nanoseconds
+    int16_t        rfGroupDelayNs;          // delay in RF amplifier (such as LNA on antenna, if present)
+    uint32_t       freqPeriod;              // frequency (Hz) or period time (microseconds), depending on "isFreq"
+    uint32_t       freqPeriodLock;          // frequency (Hz) or period time (microseconds) when locked, depending on "isFreq" and "lockedOtherSet"
+    uint32_t       pulseLenRatio;           // pulse length (microseconds) or duty cycle (2^32), depending on "isLength"
+    uint32_t       pulseLenRatioLock;       // pulse length (microseconds) or duty cycle (2^32) when locked, depending on "isFreq" and "lockedOtherSet"
+    int32_t        userConfigDelay;         // user configurable time pulse delay
+    bool           timePulse0Enabled;       // true if time pulse zero is enabled
+    bool           lockGpsFreq;            // true to synchronize time pulse to GNSS as soon as GNSS time is valid
+    bool           lockedOtherSet;          // true to use "Lock" variants of frequency when GNSS locked, non-"Lock" variants otherwise
+    bool           isFreq;                  // true to interpret "freqPeriod" values as frequency rather than period
+    bool           isLength;                // true to interpret "pulseLen" values as period rather than duty cycle
+    bool           alignToTow;              // true to align leading edge of time pulse to top of second
+    bool           polarity;                // true for rising edge at top of second, false for falling edge
+    timegridType   gridUtcTnss;             // time grid for time pulse
+    uint16_t       measRateMs;              // elapsed time between GNSS measurements, in milliseconds
+    uint16_t       navRate;                 // number of measurements per navigation solution
+    fixTimeRefType timeRef;                 // time system that navigation solutions are aligned to
+    powerModeType  powerSetup;              // power setup
+    uint16_t       powerIntervalSecs;       // power-on interval, in seconds, if in interval mode
+    uint16_t       powerOnTimeSecs;         // power on time, in seconds, if in interval mode
 } ubxConfig;
+
+char* getGnssName( gnssID id );
+char* getDynamicModelName( dynModel model );
+char* getFixModeName( fixMode mode );
+char* getUTCTypeName( utcType utc );
+char* getTimeGridTypeName( timegridType type );
+char* getFixTimeRefName( fixTimeRefType type );
+char* getPowerModeName( powerModeType type );
 
 slReturn ubxGetVersion( int fdPort, int verbosity, ubxVersion* version );
 slReturn ubxSaveConfig( int fdPort, int verbosity );
