@@ -142,6 +142,6 @@ slReturn ubxGetFix( int fdPort, int verbosity, ubxFix* fix );
 slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config );
 slReturn ubxChangeBaudRate( int fdPort, unsigned int newBaudRate, int verbosity );
 slReturn ubxSetNMEAData( int fdPort, int verbosity, bool nmeaOn );
-slReturn ubxSynchronize( const int, const int );
+slReturn ubxSynchronizer( int fdPort, int maxTimeMs, int verbosity );
 
 #endif //GPSCTL_UBLOX_H

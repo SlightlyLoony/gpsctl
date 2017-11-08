@@ -654,26 +654,30 @@ extern slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config ) {
 }
 
 
-// Returns Ok if there were no errors, and errors otherwise.  Note that this function
+// Returns Ok with additional information true if synchronized, false if timed out.  Note that this function
 // should be called prior to any series of UBX operations to ensure the UART receiver is synced to the data stream.
-extern slReturn ubxSynchronize( const int fdPort, const int verbosity ) {
+extern slReturn ubxSynchronizer(  int fdPort, int maxTimeMs, int verbosity  ) {
+
+    long long start = currentTimeMs();
 
     // flush any junk we might have in the receiver buffer...
     slReturn frResp = flushRx( fdPort );
     if( isErrorReturn( frResp ) )
         makeErrorMsgReturn( ERR_CAUSE( frResp ), "could not flush receiver prior to synchronization" );
 
-    // we're gonna try this up to 10 times...
-    for( int i = 0; i < 10; i++ ) {
+    // read characters until either we appear to be synchronized or we run out of time...
+    while( currentTimeMs() < start + maxTimeMs ) {
+
         // send the request message and wait for the response...
         ubxType type = {UBX_MON, UBX_MON_VER};
         slBuffer *body = create_slBuffer(0, LittleEndian);
         ubxMsg msg = createUbxMsg(type, body);
         ubxMsg ans;
         slReturn result = pollUbx( fdPort, msg, MON_VER_SYNC_MAX_MS, &ans );
-        if ( isOkReturn( result ) ) return makeOkReturn();
+        if ( isOkReturn( result ) )
+            return makeOkInfoReturn( bool2info( true ) );
     }
-    return makeErrorMsgReturn( ERR_ROOT, "could not synchronize to UBX data" );
+    return makeOkInfoReturn( bool2info( false ) );
 }
 
 
@@ -756,54 +760,27 @@ extern slReturn ubxSetNMEAData( int fdPort, int verbosity, bool nmeaOn ) {
 }
 
 
-static slReturn checkNMEA( int fdPort, bool nmeaOn, int verbosity ) {
-    if( !nmeaOn ) return makeOkReturn();
-    if( verbosity > 1 ) printf( "Turning NMEA data back on...\n" );
-    return ubxSetNMEAData( fdPort, verbosity, true );
-}
-
-
 extern slReturn ubxChangeBaudRate( int fdPort, unsigned int newBaudRate, int verbosity ) {
-
-    // if NMEA data is on, turn it off and remember...
-    slReturn nmeaResp = isNmeaOn( fdPort );
-    if( isErrorReturn( nmeaResp ) ) return makeErrorMsgReturn(ERR_CAUSE( nmeaResp ), "Could not determine if NMEA data was turned on" );
-    bool nmeaOn = getReturnInfoBool( nmeaResp );
-    if( nmeaOn ) {
-        if( verbosity ) printf( "NMEA data is turned on, so turning it off...\n" );
-
-        // turn NMEA data off, wait a second for the accumulated data to be transmitted, then flush everything...
-        slReturn ans = ubxSetNMEAData( fdPort, verbosity, false );
-        if( isErrorReturn( ans ) ) return makeErrorMsgReturn(ERR_CAUSE( ans ), "Could not turn NMEA data off" );
-        sleep( 1 );
-        tcflush( fdPort, TCIOFLUSH );
-    }
 
     // first we poll for the current configuration...
     ubxMsg current;
     ubxMsg pollMsg = createUbxMsg( ut_CFG_PRT, init_slBuffer( LittleEndian, 1 /* UBX_CFG_PRT_UART_ID */ ) );
     slReturn pollAns = pollUbx( fdPort, pollMsg, CFG_PRT_MAX_MS, &current );
-    if( isErrorReturn( pollAns ) ) {
-        checkNMEA( fdPort, nmeaOn, verbosity );
+    if( isErrorReturn( pollAns ) )
         return makeErrorMsgReturn(ERR_CAUSE( pollAns ), "Problem polling for current configuration before changing baud rate" );
-    }
 
     // update the baud rate in the configuration...
     put_uint32_slBuffer( current.body, 8, newBaudRate );
 
     // send out the message to change the baud rate...
     slReturn sendResp = sendUbxMsg( fdPort, createUbxMsg( ut_CFG_PRT, current.body ) );
-    if( isErrorReturn( sendResp ) ) {
-        checkNMEA( fdPort, nmeaOn, verbosity );
+    if( isErrorReturn( sendResp ) )
         return makeErrorMsgReturn(ERR_CAUSE( sendResp ), "Problem sending message to change baud rate" );
-    }
 
     // change our host's baud rate to the new one...
     slReturn stoResp = setTermOptionsBaud( fdPort, newBaudRate );
-    if( isErrorReturn( stoResp ) ) {
-        checkNMEA( fdPort, nmeaOn, verbosity );
+    if( isErrorReturn( stoResp ) )
         return makeErrorMsgReturn(ERR_CAUSE( stoResp ), "Problem changing the host baud rate" );
-    }
 
     // now get our ACK...
     slReturn ackResp = ubxAckWait( fdPort );
@@ -813,7 +790,7 @@ extern slReturn ubxChangeBaudRate( int fdPort, unsigned int newBaudRate, int ver
     if( isErrorReturn( ackResp ) ) {
 
         // poll the current configuration again...
-        if( verbosity > 0 ) printf( "ACK missing, repolling for status...\n" );
+        if( verbosity > 1 ) printf( "ACK missing, repolling for status...\n" );
         ubxMsg repollResp;
         ubxMsg repollMsg = createUbxMsg( ut_CFG_PRT, init_slBuffer( LittleEndian, 1 /* UBX_CFG_PRT_UART_ID */ ) );
         slReturn pollResp = pollUbx( fdPort, repollMsg, CFG_PRT_MAX_MS, &repollResp );
@@ -821,10 +798,7 @@ extern slReturn ubxChangeBaudRate( int fdPort, unsigned int newBaudRate, int ver
             return makeErrorMsgReturn(ERR_CAUSE( pollResp ), "Problem on second attempt to verify changed baud rate" );
     }
 
-    // if we turned off NMEA, now turn it back on...
-    slReturn nmeaOnReply = checkNMEA( fdPort, nmeaOn, verbosity );
-    if( isErrorReturn( nmeaOnReply ) )
-        return makeErrorMsgReturn(ERR_CAUSE( nmeaOnReply ), "Problem turning NMEA data back on after changing baud rate" );
+    if( verbosity >= 1) printf( "Successfully changed baud rate to %d...\n", newBaudRate );
 
     return makeOkReturn();
 }

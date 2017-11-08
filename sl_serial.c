@@ -251,188 +251,75 @@ extern slReturn setTermOptions( int fdPort, int baud, int dataBits, int stopBits
 
 
 // Default baud rate synchronizer. This looks for 50 sequential characters in the normal range of ASCII codes, and
-// then declares victory.
-// This function takes one of three different actions depending on the argument values:
-//   *state == NULL:            initializes its state and sets *state to point to it, returns false
-//   *state != NULL && c >= 0:  updates the state, if synchronized returns true, sets *state to NULL
-//   *state != NULL && c < 0:   releases resources, sets *state to NULL, returns false
-extern bool ASCIIBaudRateSynchronizer( const char c, void** state ) {
+// then declares victory.  If result is Ok, additional info is true for success.
+extern slReturn asciiBaudRateSynchronizer( int fdPort, int maxTimeMs, int verbosity ) {
 
-    typedef struct dbrState {
-        int count;
-    } dbrState;
-
-    // if we have no state, initialize it...
-    if( !*state ) {
-        *state = safeMalloc( sizeof( dbrState ));
-        ((dbrState*) (*state))->count = 0;
-        return false;
-    }
-
-    // if we are being told to release resources...
-    if( c < 0 ) {
-        free( *state );
-        *state = NULL;
-        return false;
-    }
-
-    // otherwise, update our state...
-    if(((c >= 32) && (c <= 127)) || (c == 10) || (c == 9) || (c == 13))
-        ((dbrState*) (*state))->count++;
-    else
-        ((dbrState*) (*state))->count = 0;
-
-    // if we're synchronized...
-    if(((dbrState*) (*state))->count >= 50 ) {
-        free( *state );
-        *state = NULL;
-        return true;
-    }
-
-    // if we're not there yet...
-    return false;
-}
-
-
-// Attempts to synchronize at the host's current baud rate.  If response is Ok, returns true for success, false
-// for failure, in additional information.
-extern slReturn synchronize( int fdPort, baudRateSynchronizer synchronizer, int verbosity ) {
-
-    void* state = NULL;
-    synchronizer( 0, &state );  // initialize the synchronizer
-
-    speedInfo si;
-    slReturn gsiResp = getSpeedInfo( fdPort, &si );
-    if( isErrorReturn( gsiResp ) )
-        return makeErrorMsgReturn( ERR_CAUSE( gsiResp ), "couldn't get speed information" );
-
-    if( verbosity > 0 ) printf( "Synchronizing at %d baud...\n", si.baudRate );
+    int count = 0;
     long long start = currentTimeMs();
-    long long timeout = max_ll( 1000, 200 * si.nsChar / 1000000 ); // max of one second or 200 character times...
-    while((currentTimeMs() - start) < timeout ) {
-        slReturn rscResp = readSerialChar( fdPort, start + timeout - currentTimeMs());
-        if( isErrorReturn( rscResp ) ) {
-            synchronizer( -1, &state );  // close synchronizer...
-            return makeErrorMsgReturn( ERR_CAUSE( rscResp ), "couldn't read serial character" );
-        }
+
+    // flush any junk we might have in the receiver buffer...
+    slReturn frResp = flushRx( fdPort );
+    if( isErrorReturn( frResp ) )
+        makeErrorMsgReturn( ERR_CAUSE( frResp ), "could not flush receiver prior to synchronization" );
+
+    // read characters until either we appear to be synchronized or we run out of time...
+    while( currentTimeMs() < start + maxTimeMs ) {
+
+        slReturn rscResp = readSerialChar( fdPort, start + maxTimeMs - currentTimeMs() );
+        if( isErrorReturn( rscResp ) )
+            return makeErrorMsgReturn( ERR_CAUSE( rscResp ), "problem reading a character while synchronizing" );
         if( isWarningReturn( rscResp ) )
-            break;  // if we timed out...
+            return makeOkInfoReturn( bool2info( false ) );
 
-        int c = getReturnInfoChar( rscResp );
+        char c = getReturnInfoChar( rscResp );
+        if( ((c >= 32) && (c <= 127)) || (c == 10) || (c == 9) || (c == 13) )
+            count++;
+        else
+            count = 0;
 
-        // are we synchronized yet?
-        if( verbosity >= 3 ) printf( "%c", c );
-        if( synchronizer((char) c, &state )) {
-            if( verbosity > 0 ) printf( "Synchronized at %d baud...\n", si.baudRate );
+        if( count >= 50 )
             return makeOkInfoReturn( bool2info( true ) );
-        }
     }
-    // we get here if we timed out...
-    if( verbosity > 0 ) printf( "Timed out while attempting to synchronize at %d baud...\n", si.baudRate );
-    synchronizer( -1, &state );  // close synchronizer...
     return makeOkInfoReturn( bool2info( false ) );
 }
 
 
-// Sets the baud rate on the given serial port.  If the given synchronizer is NULL, then the default synchronizer
-// will be used.  The actions taken depend on the give values for baudRate and autoRate:
-//   0, true       automatic baud rate discovery, starting at the highest baud rate and working down
-//   n, true       automatic baud rate discovery, starting at the given rate (a hint) and then working down
-//   n, false      set the baud rate to n, don't synchronize
-// Return values:
-//   SBR_SET_SYNC         baud rate is set and synchronized
-//   SBR_SET_NOSYNC       baud rate is set, but wasn't synchronized
-//   SBR_FAILED_SYNC      baud rate is not set and synchronization failed
-//   SBR_INVALID          specified baud rate was invalid
-//   SBR_PORT_ERROR       encountered a problem with the serial port
-//extern int setBaudRate( int fdPort, int baudRate, bool synchronize, bool autoRate,
-//                        baudRateSynchronizer synchronizer, bool verbose ) {
-//
-//    // if we didn't get a synchronizer, use the default...
-//    if( !synchronizer ) synchronizer = ASCIIBaudRateSynchronizer;
-//
-//    // validate our baud rate, if it's specified...
-//    if( baudRate ) {
-//        int cookie = getBaudRateCookie( baudRate );
-//        if( cookie < 0 ) return SBR_INVALID;
-//    }
-//
-//    // if we don't have automatic baud rate discovery, then we must have a specified baud rate...
-//    if( !autoRate && !baudRate ) return SBR_INVALID;
-//
-//    // set up the baud rates to try...
-//    int bauds[] = { 50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800,
-//                    2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400 };
-//    if( !autoRate ) {
-//        for( int i = 0; i < ARRAY_SIZE( bauds ); i++ ) {
-//            if( bauds[i] != baudRate ) bauds[i] = 0;
-//        }
-//    }
-//
-//    // try all the baud rates that we're supposed to try (might be just one)...
-//    int nextBaudIndex = ARRAY_SIZE( bauds ) - 1;
-//    int nextBaud = baudRate;
-//    bool done = false;
-//    void *state = NULL;
-//    synchronizer( 0, &state );  // initialize the synchronizer
-//    while( !done ) {
-//
-//        // mark this baud rate as done...
-//        for( int i = 0; i < ARRAY_SIZE( bauds ); i++ ) {
-//            if( bauds[i] == nextBaud ) {
-//                bauds[i] = 0;
-//                break;
-//            }
-//        }
-//
-//        // set the new baud rate...
-//        if( verbose ) printf( "Setting baud rate to %d...\n", nextBaud );
-//        if( setTermOptionsBaud( fdPort, nextBaud ) != stoOK ) {
-//            synchronizer( -1, &state );  // close synchronizer...
-//            return SBR_INVALID;
-//        }
-//
-//        // synchronize for auto or if requested...
-//        if( autoRate || synchronize ) {
-//
-//            if( verbose ) printf( "Synchronizing at %d baud...\n", nextBaud );
-//            long long start = currentTimeMs();
-//            speedInfo si = getSpeedInfo( fdPort );
-//            long long timeout = max_ll( 1000, 200 * si.nsChar / 1000000 ); // max of one second or 200 character times...
-//            while( (currentTimeMs() - start) < timeout ) {
-//                int c = readSerialChar( fdPort, start + timeout - currentTimeMs() );
-//                if( c == RSC_READ_ERROR ) {
-//                    synchronizer( -1, &state );  // close synchronizer...
-//                    return SBR_PORT_ERROR;
-//                }
-//                if( c == RSC_TIMED_OUT ) {
-//                    if( verbose ) printf( "Timed out when attempting to read serial character...\n" );
-//                    break;
-//                }
-//
-//                // are we synchronized yet?
-//                if( synchronizer((char) c, &state) ) {
-//                    if( verbose ) printf( "Synchronized at %d baud...\n", nextBaud );
-//                    return SBR_SET_SYNC;
-//                }
-//            }
-//            // we get here if we timed out...
-//            if( verbose ) printf( "Timed out while attempting to synchronize at %d baud...\n", nextBaud );
-//            synchronizer( -1, &state );  // close synchronizer...
-//        }
-//
-//        // get the next baud rate to try...
-//        while( (nextBaudIndex >= 0) && (bauds[nextBaudIndex] == 0) ) {
-//            nextBaudIndex--;
-//        }
-//        if( nextBaudIndex < 0 )
-//            done = true;
-//        else {
-//            nextBaud = bauds[nextBaudIndex];
-//            bauds[nextBaudIndex] = 0;
-//        }
-//    }
-//
-//    // if we get here, it's time to leave...
-//    return synchronize ? SBR_FAILED_SYNC : SBR_SET_NOSYNC;
-//}
+// Determines the baud rate on the given serial port, by sequentially trying all the possible baud rates, starting
+// with the highest (230,400) and working down to the given minimum baud rate.  If it finds a baud rate that
+// synchronizes using the given synchronizer, it stops and returns Ok with that baud rate as additional info, leaving
+// the host's port set to that baud rate.  If if fails to find a baud rate, returns an error.
+extern slReturn autoBaudRate( int fdPort, int minBaud, baudRateSynchronizer synchronizer, int verbosity ) {
+
+    // we're going to allow 250 character times, or 1.5 seconds, whichever is greater...
+    speedInfo si;
+    slReturn gsiResp = getSpeedInfo( fdPort, &si );
+    if( isErrorReturn( gsiResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( gsiResp ), "problem getting speed information" );
+    int maxMs = (int) max_ll( 1500, si.nsChar * 250 / 1000000 );
+
+    int bauds[] = { 230400, 115200, 57600, 38400, 19200, 9600, 4800, 2400,
+                    1800, 1200, 600, 300, 200, 150, 134, 110, 75, 50   };
+
+    if( verbosity >= 3 ) printf( "Trying baud rates from 230400 to %d...\n", minBaud );
+
+    for( int i = 0; (i < ARRAY_SIZE( bauds ) ) && (bauds[i] >= minBaud); i++ ) {
+
+        if( verbosity >= 2 ) printf( "Trying %d baud...\n", bauds[i] );
+
+        // set the baud rate for the current attempt...
+        slReturn stobResp = setTermOptionsBaud( fdPort, bauds[i] );
+        if( isErrorReturn( stobResp ) )
+            return makeErrorFmtMsgReturn( ERR_CAUSE( stobResp ), "problem trying to set baud rate to %d", bauds[i] );
+
+        // try to synchronize on it...
+        slReturn syncResp = synchronizer( fdPort, maxMs, verbosity );
+        if( isErrorReturn( syncResp ) )
+            return makeErrorMsgReturn( ERR_CAUSE( syncResp ), "problem while synchronizing" );
+        if( getReturnInfoBool( syncResp ) ) {
+            if( verbosity >= 2 ) printf( "Synchronized on %d baud...\n", bauds[i] );
+            return makeOkInfoReturn(int2info( bauds[i] ));
+        }
+    }
+    printf( "Could not synchronize on any baud rate...\n" );
+    return makeErrorFmtMsgReturn( ERR_ROOT, "could not synchronize at any baud rate from 230400 to %d", minBaud );
+}

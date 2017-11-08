@@ -38,6 +38,7 @@
 // TODO: add filter for NMEA message types on echo, also message verifier (only echo good messages)?
 // TODO: troll all headers, inserting parameter names and return value comments
 // TODO: add reset GPS command
+// TODO: add query for satellite ID and location
 
 // these defines allow compiling on both an OS X development machine and the target Raspberry Pi.  If different
 // development environments or target machines are needed, these will likely need to be tweaked.
@@ -111,85 +112,64 @@ static slReturn setSyncMethod( const char* arg, clientData_slOptions* clientData
 
 
 // NMEA baud rate synchronizer. This looks for a complete, valid NMEA sentence and then declares victory.
-// This function takes one of three different actions depending on the argument values:
-//   *state == NULL:            initializes its state and sets *state to point to it, returns false
-//   *state != NULL && c >= 0:  updates the state, if synchronized returns true, sets *state to NULL
-//   *state != NULL && c < 0:   releases resources, sets *state to NULL, returns false
-static bool NMEABaudRateSynchronizer( const char c, void **state ) {
+// Returns Ok with true if synchronized, false if timed out.
+static slReturn nmeaBaudRateSynchronizer( int fdPort, int maxTimeMs, int verbosity ) {
 
-    typedef struct nbrsState {
-        bool inLine;   // true if we're currently in a line...
-        int cksm;      // the running checksum (actually longitudnal parity)...
-        char last[3];  // the three most recently received characters...
-    } nbrsState;
+    bool inLine = false;
+    char last[3];
+    int cksm = 0;
+    long long start = currentTimeMs();
 
-    // convenience variable...
-    nbrsState *nbrs = ((nbrsState*)(*state));
+    // flush any junk we might have in the receiver buffer...
+    slReturn frResp = flushRx( fdPort );
+    if( isErrorReturn( frResp ) )
+        makeErrorMsgReturn( ERR_CAUSE( frResp ), "could not flush receiver prior to synchronization" );
 
-    // if we have no state, initialize it...
-    if( !*state ) {
-        *state = safeMalloc( sizeof( nbrsState ) );
-        nbrs = ((nbrsState*)(*state));
-        nbrs->inLine = false;
-        return false;
-    }
+    // read characters until either we appear to be synchronized or we run out of time...
+    while( currentTimeMs() < start + maxTimeMs ) {
 
-    // if we are being told to release resources...
-    if( c < 0 ) {
-        free( *state );
-        *state = NULL;
-        return false;
-    }
+        slReturn rscResp = readSerialChar( fdPort, start + maxTimeMs - currentTimeMs() );
+        if( isErrorReturn( rscResp ) )
+            return makeErrorMsgReturn( ERR_CAUSE( rscResp ), "problem reading a character while synchronizing" );
+        if( isWarningReturn( rscResp ) )
+            return makeOkInfoReturn( bool2info( false ) );
 
-    // otherwise, update our state...
-    if( nbrs->inLine ) {
-        if( (c == '\r') || (c == '\n') ) {
-            if( nbrs->last[0] == '*') {
-                int un = hex2int( nbrs->last[1] );
-                if( un >= 0 ) {
-                    int ln = hex2int( nbrs->last[2] );
-                    if( ln >= 0 ) {
-                        int ck = (un << 4) | ln;
+        char c = getReturnInfoChar( rscResp );
+        if( inLine ) {
+            if( (c == '\r') || (c == '\n') ) {
+                if( last[0] == '*') {
+                    int un = hex2int( last[1] );
+                    if( un >= 0 ) {
+                        int ln = hex2int( last[2] );
+                        if( ln >= 0 ) {
+                            int ck = (un << 4) | ln;
 
-                        // correct checksum for the last three characters received...
-                        nbrs->cksm ^= nbrs->last[0];
-                        nbrs->cksm ^= nbrs->last[1];
-                        nbrs->cksm ^= nbrs->last[2];
+                            // correct checksum for the last three characters received...
+                            cksm ^= last[0];
+                            cksm ^= last[1];
+                            cksm ^= last[2];
 
-                        if( ck == nbrs->cksm ) {
-                            free( *state );
-                            *state = NULL;
-                            return true;
+                            if( ck == cksm ) {
+                                return makeOkInfoReturn( bool2info( true ) );
+                            }
                         }
                     }
                 }
+                inLine = false;
             }
-            nbrs->inLine = false;
+            else {
+                cksm ^= c;
+                last[0] = last[1];
+                last[1] = last[2];
+                last[2] = c;
+            }
         }
-        else {
-            nbrs->cksm ^= c;
-            nbrs->last[0] = nbrs->last[1];
-            nbrs->last[1] = nbrs->last[2];
-            nbrs->last[2] = c;
+        else if( c == '$' ) {
+            inLine = true;
+            cksm = 0;
         }
     }
-    else if( c == '$' ) {
-        nbrs->inLine = true;
-        nbrs->cksm = 0;
-    }
-
-    // if we're not there yet...
-    return false;
-}
-
-
-// Ensure that has been synchronized UBX.  Returns Ok on success, or if UBX has already been synchronized.
-static slReturn ensureUbxSynchronized( clientData_slOptions* clientData ) {
-    if( clientData->ubxSynchronized ) return makeOkReturn();
-    slReturn usResp = ubxSynchronize( clientData->fdPort, clientData->verbosity );
-    if( isOkReturn( usResp ) ) clientData->ubxSynchronized = true;
-    if( (clientData->verbosity >= 2) && (clientData->ubxSynchronized) ) printf( "Synchronized to UBX data...\n" );
-    return usResp;
+    return makeOkInfoReturn( bool2info( false ) );
 }
 
 
@@ -197,15 +177,23 @@ static slReturn ensureUbxSynchronized( clientData_slOptions* clientData ) {
 // or false for synchronization success as a bool in additional info.
 static slReturn syncSerial( const syncType type, clientData_slOptions* clientData ) {
 
-    // if our type is ubx, then we have to send messages and see if we get a valid response...
-    if( type == syncUBX ) {
-        return ensureUbxSynchronized( clientData );
-    }
+    // we're going to allow 250 character times, or 1.5 seconds, whichever is greater...
+    speedInfo si;
+    slReturn gsiResp = getSpeedInfo( clientData->fdPort, &si );
+    if( isErrorReturn( gsiResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( gsiResp ), "problem getting speed information" );
+    int maxMs = (int) max_ll( 1500, si.nsChar * 250 / 1000000 );
 
-    // otherwise, we're going to sync on a presumed data stream (generally NMEA), so we're just listening...
-    else {
-        baudRateSynchronizer* syncer = (type == syncNMEA) ? NMEABaudRateSynchronizer : ASCIIBaudRateSynchronizer;
-        return synchronize( clientData->fdPort, syncer, clientData->verbosity );
+    switch( type ) {
+        case syncNMEA:  return nmeaBaudRateSynchronizer(  clientData->fdPort, maxMs, clientData->verbosity );
+        case syncASCII: return asciiBaudRateSynchronizer( clientData->fdPort, maxMs, clientData->verbosity );
+        case syncUBX:
+            if( clientData->ubxSynchronized ) return makeOkInfoReturn( bool2info( true ) );
+            slReturn ubsxResp = ubxSynchronizer(          clientData->fdPort, maxMs, clientData->verbosity );
+            if( isErrorReturn( ubsxResp ) ) return ubsxResp;
+            if( getReturnInfoBool( ubsxResp ) ) clientData->ubxSynchronized = true;
+            return ubsxResp;
+        default: return makeErrorFmtMsgReturn( ERR_ROOT, "unknown synchronization type: %d", type );
     }
 }
 
@@ -709,30 +697,6 @@ static slReturn actionSetup( const optionDef_slOptions* defs, const psloConfig* 
     CD->fdPort = fdPort;
     if( V2 ) printf( "Serial port open and configured...\n" );
     return makeOkReturn();
-
-    // TODO: move this code into separate actions for synchronizing or inferring...
-//    result = setBaudRate( fdPort, clientData->baud, clientData->synchronize, clientData->autobaud,
-//                          NMEABaudRateSynchronizer, clientData->verbose );
-//    int expected = (clientData->autobaud || clientData->synchronize) ? SBR_SET_SYNC : SBR_SET_NOSYNC;
-//    if( result != expected ) {
-//        switch( result ) {
-//            case SBR_INVALID:
-//                printf( "Baud rate is invalid or not specified!\n" );
-//                break;
-//            case SBR_FAILED_SYNC:
-//                printf( "Failed to synchronize serial port receiver!\n" );
-//                break;
-//            case SBR_PORT_ERROR:
-//                printf( "Error reading from serial port!\n" );
-//                break;
-//            default:
-//                printf( "Unknown error when setting baud rate (code: %d)!\n", result );
-//                break;
-//        }
-//        close( fdPort );
-//        exit( 1 );
-//    }
-
 }
 
 
@@ -744,8 +708,54 @@ static slReturn actionTeardown(  const optionDef_slOptions* defs, const psloConf
 }
 
 
+// Autobaud action function, which infers the GPS baud rate by trying to synchronize at various baud rates.
+static slReturn actionAutoBaud( const optionDef_slOptions* defs, const psloConfig* config ) {
+    
+    // first we figure out what synchronization type we're going to use...
+    baudRateSynchronizer* synchronizer;
+    clientData_slOptions* cd = config->clientData;
+    switch( cd->syncMethod ) {
+        case syncASCII:
+            synchronizer = asciiBaudRateSynchronizer;
+            break;
+        case syncNMEA:
+            synchronizer = nmeaBaudRateSynchronizer;
+            break;
+        case syncUBX:
+            synchronizer = ubxSynchronizer;
+            break;
+        default: return makeErrorFmtMsgReturn( ERR_ROOT, "invalid synchronization type: %d", cd->syncMethod );
+    }
+
+    if( V2 ) printf( "Automatically determining baud rate...\n");
+    
+    // now we do the actual work...
+    slReturn abResp = autoBaudRate( cd->fdPort, cd->minBaud, synchronizer, cd->verbosity );
+    if( isErrorReturn( abResp ) )
+        makeErrorFmtMsgReturn( ERR_CAUSE( abResp ), "problem while automatically determining baud rate" );
+
+    // change the client data to reflect the new baud rate...
+    cd->baud = cd->newbaud;
+
+    return makeOkReturn();
+}
+
+
+// New baud rate action function, which changes both the U-Blox GPS baud rate and the host baud rate.
+static slReturn actionNewBaud( const optionDef_slOptions* defs, const psloConfig* config ) {
+
+    clientData_slOptions* cd = config->clientData;
+    if( V2 ) printf( "Changing baud rate to %d...\n", cd->newbaud );
+    slReturn resp = ubxChangeBaudRate( cd->fdPort, (unsigned) cd->newbaud, cd->verbosity );
+    if( isErrorReturn( resp ) )
+        return makeErrorMsgReturn(ERR_CAUSE( resp ), "failed to change baud rate" );
+
+    return makeOkReturn();
+}
+
+
 // Sync action function, which synchronizes serial port receiver with the data stream using the configured method.
-static slReturn actionSync(  const optionDef_slOptions* defs, const psloConfig* config ) {
+static slReturn actionSync( const optionDef_slOptions* defs, const psloConfig* config ) {
 
     slReturn ssResp = syncSerial( CD->syncMethod, config->clientData );
     if( isErrorReturn( ssResp ) )
@@ -763,7 +773,7 @@ static slReturn actionSync(  const optionDef_slOptions* defs, const psloConfig* 
 static slReturn  actionNMEA(  const optionDef_slOptions* defs, const psloConfig* config ) {
 
     clientData_slOptions* clientData = config->clientData;
-    slReturn usResp = ensureUbxSynchronized( clientData );
+    slReturn usResp = syncSerial( syncUBX, clientData );
     if( isErrorReturn( usResp ) )
         return makeErrorMsgReturn( ERR_CAUSE( usResp ), "could not synchronize UBX protocol" );
 
@@ -779,7 +789,7 @@ static slReturn  actionNMEA(  const optionDef_slOptions* defs, const psloConfig*
 static slReturn  actionQuery(  const optionDef_slOptions* defs, const psloConfig* config ) {
 
     clientData_slOptions* clientData = config->clientData;
-    slReturn usResp = ensureUbxSynchronized( clientData );
+    slReturn usResp = syncSerial( syncUBX, clientData );
     if( isErrorReturn( usResp ) )
         return makeErrorMsgReturn( ERR_CAUSE( usResp ), "could not synchronize UBX protocol" );
 
@@ -802,7 +812,7 @@ static slReturn  actionSaveConfig(  const optionDef_slOptions* defs, const psloC
 
     // make sure we're synchronized...
     clientData_slOptions* clientData = config->clientData;
-    slReturn usResp = ensureUbxSynchronized( clientData );
+    slReturn usResp = syncSerial( syncUBX, clientData );
     if( isErrorReturn( usResp ) )
         return makeErrorMsgReturn( ERR_CAUSE( usResp ), "could not synchronize UBX protocol" );
 
@@ -847,17 +857,6 @@ static slReturn  actionQuiet(  const optionDef_slOptions* defs, const psloConfig
 }
 
 
-// Change baud rate on GPS and on host port...
-static slReturn newBaud( int fdPort, int newBaud, bool verbose ) {
-
-    slReturn resp = ubxChangeBaudRate( fdPort, (unsigned) newBaud, verbose );
-    if( isErrorReturn( resp ) )
-        return makeErrorMsgReturn(ERR_CAUSE( resp ), "failed to change baud rate" );
-
-    return makeOkReturn();
-}
-
-
 static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientData ) {
 
     optionDef_slOptions echoDef = {
@@ -882,7 +881,7 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
             1, "autobaud", 'a', argOptional,                                    // max, long, short, arg
             parseSyncMethod, NULL, 0,                                           // parser, ptrArg, intArg
             NULL,                                                               // constrainer
-            NULL,                                                               // action
+            actionAutoBaud,                                                     // action
             "method",                                                           // argument name
             "infer baud rate using ascii, nmea, ubx data (default is ubx)"
     };
@@ -942,7 +941,7 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
             1, "newbaud", 'B', argRequired,                                     // max, long, short, arg
             parseBaud, (void*) &clientData->newbaud, 0,                         // parser, ptrArg, intArg
             NULL,                                                               // constrainer
-            NULL,                                                               // action
+            actionNewBaud,                                                      // action
             "baud rate",                                                        // argument name
             "change the U-Blox and host baud rates to the specified standard rate"
     };
