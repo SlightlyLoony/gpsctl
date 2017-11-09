@@ -34,8 +34,10 @@
 #define UBX_MON_VER  0x04
 #define UBX_NAV      0x01
 #define UBX_NAV_PVT  0x07
+#define UBX_NAV_SAT  0x35
 
 #define NAV_PVT_MAX_MS      2000
+#define NAV_SAT_MAX_MS      2000
 #define CFG_NAV5_MAX_MS     2000
 #define MON_VER_MAX_MS      2000
 #define MON_VER_SYNC_MAX_MS 1200
@@ -431,6 +433,94 @@ extern slReturn ubxGetVersion( int fdPort, int verbosity, ubxVersion* version ) 
             ptr++;
         }
         *ptr = NULL;
+    }
+
+    return makeOkReturn();
+}
+
+
+extern char* getSignalQuality( signalQuality qual ) {
+    switch( qual ) {
+        case signalNone: return "None";
+        case signalAcquired: return "Acquired";
+        case signalCodeCarrierLocked: return "Code/carrier locked";
+        case signalCodeLocked: return "Code locked";
+        case signalSearching: return "Searching";
+        case signalUnusable: return "Unusable";
+        default: return "Unknown";
+    }
+}
+
+
+extern char* getSatelliteHealth( satelliteHealth health ) {
+    switch( health ) {
+        case healthUnknown: return "Unknown";
+        case healthOk: return "Ok";
+        case healthBad: return "Bad";
+        default: return "Unknown";
+    }
+}
+
+
+extern char* getOrbitSource( orbitSource source ) {
+    switch( source ) {
+        case osNone: return "None";
+        case osAlmanac: return "Almanac";
+        case osAssistNowAutonomous: return "AssistNow auto";
+        case osAssistNowOffline: return "AssistNow off";
+        case osEphemeris: return "Ephemeris";
+        case osOther: return "Other";
+        default: return "Unknown";
+    }
+}
+
+
+// Fills the ubxSatellites structure at the given pointer with information about the GPS satellites.
+extern slReturn ubxGetSatellites( int fdPort, int verbosity, ubxSatellites* satellites ) {
+
+    ubxType type = { UBX_NAV, UBX_NAV_SAT };
+    slBuffer* body = create_slBuffer( 0, LittleEndian );
+    ubxMsg msg = createUbxMsg( type, body );
+    ubxMsg satMsg;
+    slReturn nsResp = pollUbx( fdPort, msg, MON_VER_MAX_MS, &satMsg );
+    if( isErrorReturn( nsResp ) ) return nsResp;
+
+    // now decode our message, starting with the number of satellites...
+    void* b = satMsg.body;
+    ubxSatellites* ss = satellites;
+    ss->numberOfSatellites = get_uint8_slBuffer( b, 5 );
+
+    // make a place to store our results...
+    ss->satellites = safeMalloc( ss->numberOfSatellites * sizeof( ubxSatellite ) );
+
+    // now examine each of our satellites...
+    for( int i = 0; i < ss->numberOfSatellites; i++ ) {
+        ubxSatellite* s = ss->satellites + i;
+        size_t o = (unsigned) (8 + 12 * i);
+
+        s->gnssID               = get_uint8_slBuffer(  b, o + 0 );
+        s->satelliteID          = get_uint8_slBuffer(  b, o + 1 );
+        s->cno                  = get_uint8_slBuffer(  b, o + 2 );
+        s->elevation            = get_int8_slBuffer(   b, o + 3 );
+        s->azimuth              = get_int16_slBuffer(  b, o + 4 );
+        s->pseudoRangeResidualM = get_int8_slBuffer(   b, o + 6 ) * 0.1;
+
+        uint32_t flags       = get_uint32_slBuffer( b, o + 8 );
+        s->signalQuality     = (signalQuality) min_i( (int) getBitField_slBits( flags, 0x07 ), 5 );
+        s->used              = isBitSet_slBits( flags, 3 );
+        s->health            = (satelliteHealth) getBitField_slBits( flags, 0x30 );
+        s->diffCorr          = isBitSet_slBits( flags, 6 );
+        s->smoothed          = isBitSet_slBits( flags, 7 );
+        s->orbitSource       = (orbitSource) min_i( (int) getBitField_slBits( flags, 0x700 ), 5 );
+        s->haveEphemeris     = isBitSet_slBits( flags, 11 );
+        s->haveAlmanac       = isBitSet_slBits( flags, 12 );
+        s->haveAssistNowOff  = isBitSet_slBits( flags, 13 );
+        s->haveAssistNowAuto = isBitSet_slBits( flags, 14 );
+        s->sbasCorrUsed      = isBitSet_slBits( flags, 16 );
+        s->rtcmCorrUsed      = isBitSet_slBits( flags, 17 );
+        s->prCorrUsed        = isBitSet_slBits( flags, 20 );
+        s->crCorrUsed        = isBitSet_slBits( flags, 21 );
+        s->doCorrUsed        = isBitSet_slBits( flags, 22 );
     }
 
     return makeOkReturn();

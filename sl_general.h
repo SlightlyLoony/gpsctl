@@ -37,6 +37,8 @@ bool issgraph( const char* str );
 
 char* concat( const char *s1, const char *s2 );
 
+void append( char** s1, const char* s2 );
+
 void sleep_ns( int ns );
 
 long long currentTimeMs();
@@ -44,6 +46,7 @@ long long currentTimeMs();
 bool strempty( const char* str );
 
 long long max_ll( long long a, long long b );
+int min_i( int a, int b);
 
 int hex2int( char c );
 

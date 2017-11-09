@@ -36,7 +36,7 @@ extern slReturn getSpeedInfo( int fdPort, speedInfo* result ) {
     result->nsBit = 1000000000 / result->baudRate;
     int stopBits = (options.c_cflag & CSTOPB) ? 2 : 1;
     int dataBits = (int) getBitField_slBits( options.c_cflag, CSIZE );
-    int bits = stopBits + dataBits;
+    int bits = stopBits + dataBits + 1;  // the +1 is for the ever-present start bit...
     result->nsChar = bits * result->nsBit;
     return makeOkReturn();
 }

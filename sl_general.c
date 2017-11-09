@@ -61,6 +61,17 @@ extern bool issgraph( const char* str ) {
 }
 
 
+// Appends the second given string to the first.  If the first string is NULL, makes a new copy of the second into
+// the first.  Otherwise, allocates memory for the concatenation of the two strings, concatenates them, and frees
+// the original first string.  This mechanism allows a series of appends to be performed while ending up with only
+// one unfreed allocated block of memory: the one with the result.
+extern void append( char** s1, const char* s2 ) {
+    char* r = concat( *s1, s2 );
+    free( *s1 );
+    *s1 = r;
+}
+
+
 // Return the concatenation of the two given string in a newly allocated memory on the heap.  If the two
 // given strings are null, a null is returned.  If one of the given strings is null, then a COPY (in newly allocated
 // memory) of the non-null given string is returned.  Note that this behavior means that ANY non-null return value
@@ -68,19 +79,22 @@ extern bool issgraph( const char* str ) {
 // and the program is aborted.
 extern char* concat( const char *s1, const char *s2 ) {
 
-    // get the lengths just once (optimization)...
-    const size_t len1 = s1 ? strlen(s1) : 0;
-    const size_t len2 = s2 ? strlen(s2) : 0;
+    // if both arguments are NULL, return a NULL...
+    if( (s1 == NULL) && (s2 == NULL) ) return NULL;
 
-    // if both arguments were null, return with a null...
-    if( len1 + len2 == 0 ) return NULL;
+    // get the lengths just once (optimization)...
+    const size_t len1 = s1 ? strlen( s1 ) : 0;
+    const size_t len2 = s2 ? strlen( s2 ) : 0;
 
     // get the memory required for the concatenated strings plus the terminator...
     char *result = safeMalloc( len1 + len2 + 1 );
 
     // build our result...
-    memcpy(result, s1, len1);
-    memcpy(result + len1, s2, len2 + 1 ); //+1 to copy the null-terminator
+    if( s1 != NULL ) memcpy(result, s1, len1);
+    if( s2 != NULL ) memcpy(result + len1, s2, len2 );
+
+    // insert the terminator...
+    *(result + len1 + len2) = 0;
 
     return result;
 }
@@ -94,6 +108,11 @@ extern bool strempty( const char* str ) {
 
 extern long long max_ll( long long a, long long b ) {
     return (a > b) ? a : b;
+}
+
+
+extern int min_i( int a, int b ) {
+    return (a < b) ? a : b;
 }
 
 

@@ -1,1 +1,1 @@
- --query config -j
+ -vv --query satellites

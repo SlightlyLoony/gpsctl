@@ -39,6 +39,7 @@
 // TODO: troll all headers, inserting parameter names and return value comments
 // TODO: add reset GPS command
 // TODO: add query for satellite ID and location
+// TODO: when no baud rate is specified, leave it the hell alone
 
 // these defines allow compiling on both an OS X development machine and the target Raspberry Pi.  If different
 // development environments or target machines are needed, these will likely need to be tweaked.
@@ -62,7 +63,7 @@
 #include "ublox.h"
 #include "cJSON.h"
 
-typedef enum { fixQuery, versionQuery, configQuery } queryType;
+typedef enum { fixQuery, versionQuery, configQuery, satelliteQuery } queryType;
 typedef enum { syncNone, syncASCII, syncNMEA, syncUBX } syncType;
 typedef struct { char* name; syncType type; } syncTypeRec;
 
@@ -312,6 +313,84 @@ static slReturn doVersionQuery( const clientData_slOptions* clientData ) {
 }
 
 
+// comparison function for satellite search...
+int cmpSatellite( const void* a, const void* b ) {
+
+    ubxSatellite* c = (ubxSatellite*) a;
+    ubxSatellite* d = (ubxSatellite*) b;
+
+    if( c->used && !d->used ) return -1;
+    if( d->used && !c->used ) return 1;
+    return d->cno - c->cno;
+}
+
+
+// Outputs a satellite query, in English or JSON.
+static slReturn doSatelliteQuery( const clientData_slOptions* clientData ) {
+
+    // get the satellite data from the GPS...
+    ubxSatellites satellites = {0};  // zeroes all elements...
+    slReturn ugsResp = ubxGetSatellites( clientData->fdPort, clientData->verbosity, &satellites );
+    if( isErrorReturn( ugsResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( ugsResp ), "Problem obtaining satellites information from GPS" );
+
+    // sort the result by used or not, then in descending order of CNo...
+    qsort( satellites.satellites, (unsigned) satellites.numberOfSatellites, sizeof( ubxSatellite ), cmpSatellite );
+
+    if( clientData->json ) {
+    }
+    else {
+        /* u = used
+         * d = diffCorr
+         * s = smoothed
+         * e = have ephemeris
+         * a = have almanac
+         * S = sbasCorrUsed
+         * R = rtcmCorrUsed
+         * P = pseudorange corrections used
+         * C = carrier range corrections used
+         * D = range rate (Doppler) corrections used
+         */
+        // GNSS ID CNO ELV AZI Res Qual Hlth Src Flags
+        //  8    4  4   4   4   6   20   8    15
+
+        // print out our column headers...
+        printf( "%-8s%3s %3s %3s %3s %5s %-20s%-8s%-15sFlags\n", "GNSS", "ID", "CNo", "El", "Azi", "PRr", "Signal qual", "Sat Hlt", "Orbit Src" );
+
+        // now print out all our satellites...
+        for( int i = 0; i < satellites.numberOfSatellites; i++ ) {
+
+            // build up our flags string...
+            ubxSatellite* s = satellites.satellites + i;
+            char* flags = NULL;
+            if( s->used )          append( &flags, "u" );
+            if( s->diffCorr )      append( &flags, "d" );
+            if( s->smoothed )      append( &flags, "s" );
+            if( s->haveEphemeris ) append( &flags, "e" );
+            if( s->haveAlmanac )   append( &flags, "a" );
+            if( s->sbasCorrUsed )  append( &flags, "S" );
+            if( s->rtcmCorrUsed )  append( &flags, "R" );
+            if( s->prCorrUsed )    append( &flags, "P" );
+            if( s->crCorrUsed )    append( &flags, "C" );
+            if( s->doCorrUsed )    append( &flags, "D" );
+            if( flags == NULL )    append( &flags, ""  );
+
+            // print our satellite line...
+            printf( "%-8s%3d %3d %3d %3d %5.1f %-20s%-8s%-15s%s\n",
+                    getGnssName( s->gnssID ), s->satelliteID, s->cno, s->elevation, s->azimuth, s->pseudoRangeResidualM,
+                    getSignalQuality( s->signalQuality ), getSatelliteHealth( s->health ), getOrbitSource( s->orbitSource ), flags );
+
+            free( flags );
+        }
+    }
+
+    // free up the memory we allocated...
+    free( satellites.satellites );
+
+    return makeOkReturn();
+}
+
+
 // Outputs a configuration query, in English or JSON.
 static slReturn doConfigQuery( const clientData_slOptions* clientData ) {
 
@@ -525,7 +604,7 @@ static slReturn parseBaud( void* ptrArg, int intArg, const optionDef_slOptions* 
 // Parse autobaud or sync, which have an optional argument of ascii, nmea, or ubx.
 static slReturn parseSyncMethod( void* ptrArg, int intArg, const optionDef_slOptions* def, const char* arg, clientData_slOptions* clientData ) {
 
-    // if we get here, we couldn't find the argument...
+    // set up the sync method...
     slReturn ssmResp = setSyncMethod( arg, clientData );
     if( isErrorReturn( ssmResp ) )
         return parseMsgHelper(ERR_CAUSE( ssmResp ), def, "the specified baud rate inference method (\"%s\") is unrecognizable; should be \"ascii\", \"nmea\", or \"ubx\"", arg );
@@ -579,9 +658,10 @@ static slReturn parseFlag( void* ptrArg, int intArg, const optionDef_slOptions* 
 
 typedef struct { char* name; queryType queryType; } queryDef;
 static queryDef queryDefs[] = {
-        { "fix",     fixQuery     },
-        { "version", versionQuery },
-        { "config",  configQuery  }
+        { "fix",        fixQuery       },
+        { "version",    versionQuery   },
+        { "satellites", satelliteQuery },
+        { "config",     configQuery    }
 };
 
 
@@ -685,14 +765,6 @@ static slReturn actionSetup( const optionDef_slOptions* defs, const psloConfig* 
     }
     if( V2 ) printf( "Serial port (\"%s\") open...\n", CD->port );
 
-    // now we set the correct options (the configured baud rate, 8 data bits, 1 stop bit, no parity)
-    // note that this baud rate may be incorrect, and we might try to infer it in a moment...
-    slReturn result = setTermOptions( fdPort, CD->baud, 8, 1, false, false );
-    if( isErrorReturn( result ) ) {
-        close( fdPort );
-        return makeErrorMsgReturn(ERR_CAUSE( result ), "Error when setting terminal options" );
-    }
-
     // stuff our file descriptor and return in victory...
     CD->fdPort = fdPort;
     if( V2 ) printf( "Serial port open and configured...\n" );
@@ -710,7 +782,7 @@ static slReturn actionTeardown(  const optionDef_slOptions* defs, const psloConf
 
 // Autobaud action function, which infers the GPS baud rate by trying to synchronize at various baud rates.
 static slReturn actionAutoBaud( const optionDef_slOptions* defs, const psloConfig* config ) {
-    
+
     // first we figure out what synchronization type we're going to use...
     baudRateSynchronizer* synchronizer;
     clientData_slOptions* cd = config->clientData;
@@ -728,7 +800,14 @@ static slReturn actionAutoBaud( const optionDef_slOptions* defs, const psloConfi
     }
 
     if( V2 ) printf( "Automatically determining baud rate...\n");
-    
+
+    // now we set the correct options (the first baud rate, 8 data bits, 1 stop bit, no parity)
+    slReturn result = setTermOptions( CD->fdPort, 230400, 8, 1, false, false );
+    if( isErrorReturn( result ) ) {
+        close(CD->fdPort );
+        return makeErrorMsgReturn(ERR_CAUSE( result ), "Error when setting terminal options" );
+    }
+
     // now we do the actual work...
     slReturn abResp = autoBaudRate( cd->fdPort, cd->minBaud, synchronizer, cd->verbosity );
     if( isErrorReturn( abResp ) )
@@ -736,6 +815,22 @@ static slReturn actionAutoBaud( const optionDef_slOptions* defs, const psloConfi
 
     // change the client data to reflect the new baud rate...
     cd->baud = cd->newbaud;
+
+    return makeOkReturn();
+}
+
+
+// Baud action function, which sets the host's port to the specified baud rate.
+static slReturn actionBaud( const optionDef_slOptions* defs, const psloConfig* config ) {
+
+    if( V2 ) printf( "Setting baud rate to %d...\n", CD->baud );
+
+    // now we set the correct options (the specified baud rate, 8 data bits, 1 stop bit, no parity)
+    slReturn result = setTermOptions( CD->fdPort, CD->baud, 8, 1, false, false );
+    if( isErrorReturn( result ) ) {
+        close(CD->fdPort );
+        return makeErrorMsgReturn(ERR_CAUSE( result ), "Error when setting terminal options" );
+    }
 
     return makeOkReturn();
 }
@@ -796,9 +891,11 @@ static slReturn  actionQuery(  const optionDef_slOptions* defs, const psloConfig
     slReturn resp;
     switch( clientData->queryType ) {
 
-        case fixQuery:     resp = doFixQuery(     clientData ); break;
-        case versionQuery: resp = doVersionQuery( clientData ); break;
-        case configQuery:  resp = doConfigQuery(  clientData ); break;
+        case fixQuery:       resp = doFixQuery(     clientData   ); break;
+        case versionQuery:   resp = doVersionQuery( clientData   ); break;
+        case configQuery:    resp = doConfigQuery(  clientData   ); break;
+        case satelliteQuery: resp = doSatelliteQuery( clientData ); break;
+
         default: return makeErrorFmtMsgReturn(ERR_ROOT, "invalid query type: %d", clientData->queryType );
     }
     if( isErrorReturn( resp ) )
@@ -921,9 +1018,9 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
             1, "baud", 'b', argRequired,                                        // max, long, short, arg
             parseBaud, (void*) &clientData->baud, 0,                            // parser, ptrArg, intArg
             constrainBaud,                                                      // constrainer
-            NULL,                                                               // action
+            actionBaud,                                                         // action
             "baud rate",                                                        // argument name
-            "specify host baud rate (default is '9600'); any standard rate is allowed"
+            "specify different host baud rate; any standard rate is allowed"
     };
 
 
@@ -983,6 +1080,8 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
     };
 
     optionDef_slOptions optionDefs[] = {
+
+            // initialization elements...
             verboseDef,
             quietDef,
             portDef,
@@ -990,13 +1089,15 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
             autobaudDef,
             baudDef,
             minBaudDef,
+
+            // all the above MUST come before those below, or port won't be initialized correctly...
             syncDef,
             newbaudDef,
             nmeaDef,
             queryDef,
             saveConfigDef,
             echoDef,
-            { 0 }
+            { 0 }  // terminator; MUST be at the end of this list...
     };
 
     // allocate memory for our option definitions, and copy them in...
@@ -1034,7 +1135,7 @@ int main( int argc, char *argv[] ) {
 
     // initialize our client data structure, and set defaults...
     clientData_slOptions clientData = { 0 };
-    clientData.baud = 9600;
+    clientData.baud = 0;            // triggers actionSetup to keep existing terminal options, including baud rate
     clientData.minBaud = 9600;
     clientData.port = "/dev/serial0";
     clientData.syncMethod = syncUBX;
@@ -1054,7 +1155,14 @@ int main( int argc, char *argv[] ) {
 
     slReturn resp = process_slOptions(argc, (const char **) argv, &config );
 
-    if( isErrorReturn( resp ) ) printReturn( resp, true, true );
+    if( isErrorReturn( resp ) )
+        switch( clientData.verbosity ) {
+            case 0:  printf( "Errors occurred!\n" ); break;
+            case 1:  printReturn( resp, false, false ); break;
+            case 2:  printReturn( resp, true, false ); break;
+            case 3:  printReturn( resp, true, true ); break;
+            default: printReturn( resp, true, true ); break;
+        }
 
     freeReturn( resp );
 

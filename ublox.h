@@ -66,6 +66,7 @@ typedef struct {
     int number_of_extensions;
 } ubxVersion;
 
+
 typedef enum { GPS, SBAS, Galileo, BeiDou, IMES, QZSS, GLONASS } gnssID;
 typedef enum { Portable, Stationary = 2, Pedestrian, Automotive, Sea, Air1G, Air2G, Air4G, Watch } dynModel;
 typedef enum { Only2D = 1, Only3D, Auto2D3D } fixMode;
@@ -73,6 +74,39 @@ typedef enum { AutoUTC, USNO_UTC = 3, GLONASS_UTC = 6, BeiDou_UTC } utcType;
 typedef enum { tgUTC, tgGPS, tgGLONASS, tgBeiDou, tgGalileo } timegridType;
 typedef enum { fixUTC, fixGPS, fixGLONASS, fixBeiDou, fixGalileo } fixTimeRefType;
 typedef enum { pmFull, pmBalanced, pmInterval, pmAggressive1Hz, pmAggressive2Hz, pmAggressive4Hz, pmInvalid=0xFF } powerModeType;
+typedef enum { signalNone, signalSearching, signalAcquired, signalUnusable, signalCodeLocked, signalCodeCarrierLocked } signalQuality;
+typedef enum { healthUnknown, healthOk, healthBad } satelliteHealth;
+typedef enum { osNone, osEphemeris, osAlmanac, osAssistNowOffline, osAssistNowAutonomous, osOther } orbitSource;
+
+typedef struct {
+    gnssID          gnssID;                 // GNSS that this satellite belongs to
+    uint8_t         satelliteID;            // the GNSS-assigned satellite number
+    uint8_t         cno;                    // the carrier-to-noise signal ratio in dBHz
+    int8_t          elevation;              // elevation in degrees (0 is horizon, +/- 90 degrees
+    int16_t         azimuth;                // azimuth in degrees (0-360, 0 is due north)
+    double          pseudoRangeResidualM;   // pseudo range residual, in meters
+    signalQuality   signalQuality;          // signal quality
+    bool            used;                   // true if this satellite is being used for navigation
+    satelliteHealth health;                 // current state of satellite health
+    bool            diffCorr;               // true if differential correction data is available for this satellite
+    bool            smoothed;               // true if a carrier-smoothed pseudorange is being used for this satellite
+    orbitSource     orbitSource;            // the source for the orbital information for this satellite
+    bool            haveEphemeris;          // true if the GPS has an ephemeris for this satellite
+    bool            haveAlmanac;            // true if the GPS has an almanac for this satellite
+    bool            haveAssistNowOff;       // true if the GPS has AssistNow offline data for this satellite
+    bool            haveAssistNowAuto;      // true if the GPS has AssistNow autonomous data for this satellite
+    bool            sbasCorrUsed;           // true if the GPS used SBAS corrections for this satellite
+    bool            rtcmCorrUsed;           // true if the GPS used RTCM corrections for this satellite
+    bool            prCorrUsed;             // true if the GPS used pseudorange corrections for this satellite
+    bool            crCorrUsed;             // true if the GPS used carrier range corrections for this satellite
+    bool            doCorrUsed;             // true if the GPS used range rate (Doppler) corrections for this satellite
+} ubxSatellite;
+
+typedef struct {
+    int numberOfSatellites;
+    ubxSatellite* satellites;
+} ubxSatellites;
+
 typedef struct {
     gnssID id;
     int minChnnls;
@@ -135,8 +169,12 @@ char* getUTCTypeName( utcType utc );
 char* getTimeGridTypeName( timegridType type );
 char* getFixTimeRefName( fixTimeRefType type );
 char* getPowerModeName( powerModeType type );
+char* getSignalQuality( signalQuality qual );
+char* getSatelliteHealth( satelliteHealth health );
+char* getOrbitSource( orbitSource source );
 
 slReturn ubxGetVersion( int fdPort, int verbosity, ubxVersion* version );
+slReturn ubxGetSatellites( int fdPort, int verbosity, ubxSatellites* satellites );
 slReturn ubxSaveConfig( int fdPort, int verbosity );
 slReturn ubxGetFix( int fdPort, int verbosity, ubxFix* fix );
 slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config );
