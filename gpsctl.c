@@ -551,7 +551,7 @@ static slReturn doConfigQuery( const clientData_slOptions* clientData ) {
         printf( "    Use frequency vs. period:     %s\n", yesNo(               config.isFreq )            );
         printf( "    Use length vs. duty cycle:    %s\n", yesNo(               config.isLength )          );
         printf( "    Lock on GPS frequency:        %s\n", yesNo(               config.lockGpsFreq )       );
-        printf( "    LockUseOtherSet:              %s\n", yesNo(               config.lockedOtherSet )    );
+        printf( "    Lock use other set:           %s\n", yesNo(               config.lockedOtherSet )    );
         printf( "    Align to top of second:       %s\n", yesNo(               config.alignToTow )        );
         printf( "    Polarity rising edge:         %s\n", yesNo(               config.polarity )          );
         printf( "    Time grid:                    %s\n", getTimeGridTypeName( config.gridUtcTnss )       );
