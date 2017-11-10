@@ -33,7 +33,6 @@
 
 // TODO: make sure we free any allocated slBuffers!
 // TODO: add needed printfs for verbose mode...
-// TODO: add filter for NMEA message types on echo, also message verifier (only echo good messages)?
 // TODO: troll all headers, inserting parameter names and return value comments
 
 // these defines allow compiling on both an OS X development machine and the target Raspberry Pi.  If different
@@ -50,6 +49,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <wiringPi.h>
 #include <math.h>
 #include "sl_return.h"
 #include "sl_options.h"
@@ -807,9 +807,60 @@ static slReturn actionSetup( const optionDef_slOptions* defs, const psloConfig* 
 
 
 // Teardown action function, which closes the serial port.
-static slReturn actionTeardown(  const optionDef_slOptions* defs, const psloConfig* config ) {
+static slReturn actionTeardown( const optionDef_slOptions* defs, const psloConfig* config ) {
 
     close( CD->fdPort );
+    return makeOkReturn();
+}
+
+
+// Test for the presence and quality of a 1 Hz signal on GPIO 18 (the PPS signal from the GPS), printing the result.
+#define PPS_PIN 1
+static slReturn actionTestPPS( const optionDef_slOptions* defs, const psloConfig* config ) {
+
+    wiringPiSetup();
+    pinMode( PPS_PIN, INPUT );
+
+    struct timespec tenmicro = { 0, 10000 };
+
+    struct timespec lastTime = { 0, 0 };
+
+    // measure for about 10 seconds...
+    int lastState = 0;
+    for( int i = 0; i < 100000; i++ ) {
+
+        // wait 10 microseconds
+        nanosleep( &tenmicro, NULL );
+
+        // check our state...
+        int state = digitalRead( PPS_PIN );
+
+        // if the state has changed, time to measure and report...
+        if(state != lastState ) {
+
+            // get the current time...
+            struct timespec thisTime;
+            int result = clock_gettime( CLOCK_MONOTONIC, &thisTime );
+            if( result != 0 )
+                return makeErrorFmtMsgReturn( ERR_ROOT, "problem reading CPU clock: %s", strerror( errno ) );
+
+            // if this isn't our first measurement...
+            if( (lastTime.tv_sec != 0 ) || (lastTime.tv_nsec != 0) ) {
+
+                // figure out how long we were in this state...
+                long long nanos = thisTime.tv_nsec - lastTime.tv_nsec;
+                if( nanos < 0 ) nanos += 1000000000;
+                double secs = 1.0 * nanos / 1000000000.0;
+
+                // tell our results...
+                char* signal = (lastState == 0) ? " low" : "high";
+                printf( "PPS was %s for %.3f seconds\n", signal, secs );
+            }
+            lastTime = thisTime;
+            lastState = state;
+        }
+    }
+
     return makeOkReturn();
 }
 
@@ -1159,6 +1210,15 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
             "reset the GPS"
     };
 
+    optionDef_slOptions testPpsDef = {
+            1, "test", 0, argNone,                                              // max, long, short, arg
+            NULL, NULL, 0,                                                      // parser, ptrArg, intArg
+            NULL,                                                               // constrainer
+            actionTestPPS,                                                      // action
+            NULL,                                                               // argument name
+            "test the GPS' PPS signal"
+    };
+
     optionDef_slOptions configureForTimingDef = {
             1, "configure_for_timing", 0, argNone,                              // max, long, short, arg
             NULL, NULL, 0,                                                      // parser, ptrArg, intArg
@@ -1178,6 +1238,7 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
             autobaudDef,
             baudDef,
             minBaudDef,
+            testPpsDef,
 
             // all the above MUST come before those below, or port won't be initialized correctly...
             syncDef,
@@ -1204,13 +1265,14 @@ static char* exampleText =
     "Additional information:\n"
     "\n"
     "  Query types:\n"
-    "    fix      returns position, altitude, and time information\n"
-    "    version  returns hardware and software version of the GPS\n"
-    "    config   returns GPS configuration information\n"
+    "    fix         returns position, altitude, and time information\n"
+    "    version     returns hardware and software version of the GPS\n"
+    "    config      returns GPS configuration information\n"
+    "    satellites  returns currently visible satellite information from the GPS\n"
     "\n"
     "  Yes or no values:\n"
-    "    yes      indicated by an initial character of 'y', 'Y', 't', 'T', or '1'\n"
-    "    no       indicated by anything else\n"
+    "    yes         indicated by an initial character of 'y', 'Y', 't', 'T', or '1'\n"
+    "    no          indicated by anything else\n"
     "\n"
     "Examples:\n"
     "   gpsctl --port=/dev/serial1 --baud 9600 --echo=5\n"
