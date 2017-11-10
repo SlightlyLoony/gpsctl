@@ -722,7 +722,7 @@ static slReturn parsePhase( int argc, const psloConfig *config, state_slOptions 
     }
 
     // make sure the last option has an argument, if it requires one...
-    if((LAST_OPT_REC.def->arg == argRequired) && (LAST_OPT_REC.arg == NULL))
+    if( (state->numOptionRecords > 0) && (LAST_OPT_REC.def->arg == argRequired) && (LAST_OPT_REC.arg == NULL) )
         return errorMessageHelper(ERR_ROOT, DEBUG, "parsing", "option [%s] missing required argument",
                                   getName_slOptions(LAST_OPT_REC.def ));
 

@@ -31,15 +31,10 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-// TODO: add set stationary or portable mode
-// TODO: set antenna and cable length specs
 // TODO: make sure we free any allocated slBuffers!
 // TODO: add needed printfs for verbose mode...
 // TODO: add filter for NMEA message types on echo, also message verifier (only echo good messages)?
 // TODO: troll all headers, inserting parameter names and return value comments
-// TODO: add reset GPS command
-// TODO: add query for satellite ID and location
-// TODO: when no baud rate is specified, leave it the hell alone
 
 // these defines allow compiling on both an OS X development machine and the target Raspberry Pi.  If different
 // development environments or target machines are needed, these will likely need to be tweaked.
@@ -338,21 +333,46 @@ static slReturn doSatelliteQuery( const clientData_slOptions* clientData ) {
     qsort( satellites.satellites, (unsigned) satellites.numberOfSatellites, sizeof( ubxSatellite ), cmpSatellite );
 
     if( clientData->json ) {
+
+        cJSON* root = cJSON_CreateObject();
+        cJSON* sats = cJSON_CreateArray();
+
+        cJSON_AddNumberToObject( root, "number_of_satellites", satellites.numberOfSatellites );
+        cJSON_AddItemToObject( root, "satellites", sats );
+
+        for( int i = 0; i < satellites.numberOfSatellites; i++ ) {
+            ubxSatellite* s = satellites.satellites + i;
+            cJSON* sat = cJSON_CreateObject();
+            cJSON_AddItemToArray( sats, sat );
+            cJSON_AddStringToObject( sat, "gnssID", getGnssName(                 s->gnssID             ) );
+            cJSON_AddNumberToObject( sat, "satelliteID",                         s->satelliteID          );
+            cJSON_AddNumberToObject( sat, "CNo",                                 s->cno                  );
+            cJSON_AddNumberToObject( sat, "elevation",                           s->elevation            );
+            cJSON_AddNumberToObject( sat, "azimuth",                             s->azimuth              );
+            cJSON_AddNumberToObject( sat, "pseudoRangeResidual_meters",          s->pseudoRangeResidualM );
+            cJSON_AddStringToObject( sat, "signalQuality", getSignalQuality(     s->signalQuality      ) );
+            cJSON_AddBoolToObject(   sat, "used",                                s->used                 );
+            cJSON_AddStringToObject( sat, "satelliteHealth", getSatelliteHealth( s->health             ) );
+            cJSON_AddBoolToObject(   sat, "diffCorr",                            s->diffCorr             );
+            cJSON_AddBoolToObject(   sat, "smoothed",                            s->smoothed             );
+            cJSON_AddStringToObject( sat, "orbitSource", getOrbitSource(         s->orbitSource        ) );
+            cJSON_AddBoolToObject(   sat, "haveEphemeris",                       s->haveEphemeris        );
+            cJSON_AddBoolToObject(   sat, "haveAlmanac",                         s->haveAlmanac          );
+            cJSON_AddBoolToObject(   sat, "haveAssistNowOff",                    s->haveAssistNowOff     );
+            cJSON_AddBoolToObject(   sat, "haveAssistNowAuto",                   s->haveAssistNowAuto    );
+            cJSON_AddBoolToObject(   sat, "sbasCorrUsed",                        s->sbasCorrUsed         );
+            cJSON_AddBoolToObject(   sat, "rtcmCorrUsed",                        s->rtcmCorrUsed         );
+            cJSON_AddBoolToObject(   sat, "prCorrUsed",                          s->prCorrUsed           );
+            cJSON_AddBoolToObject(   sat, "crCorrUsed",                          s->crCorrUsed           );
+            cJSON_AddBoolToObject(   sat, "doCorrUsed",                          s->doCorrUsed           );
+        }
+
+        char *jsonStr = cJSON_PrintUnformatted( root );
+        printf( "%s\n", jsonStr );
+
+        cJSON_Delete( root );
     }
     else {
-        /* u = used
-         * d = diffCorr
-         * s = smoothed
-         * e = have ephemeris
-         * a = have almanac
-         * S = sbasCorrUsed
-         * R = rtcmCorrUsed
-         * P = pseudorange corrections used
-         * C = carrier range corrections used
-         * D = range rate (Doppler) corrections used
-         */
-        // GNSS ID CNO ELV AZI Res Qual Hlth Src Flags
-        //  8    4  4   4   4   6   20   8    15
 
         // print out our column headers...
         printf( "%-8s%3s %3s %3s %3s %5s %-20s%-8s%-15sFlags\n", "GNSS", "ID", "CNo", "El", "Azi", "PRr", "Signal qual", "Sat Hlt", "Orbit Src" );
@@ -382,6 +402,18 @@ static slReturn doSatelliteQuery( const clientData_slOptions* clientData ) {
 
             free( flags );
         }
+        printf( "Flags:\n"
+                "  u - used for navigation fix\n"
+                "  d - differential correction is available\n"
+                "  s - carrier-smoothed pseudorange used\n"
+                "  e - ephemeris is available\n"
+                "  a - almanac is available\n"
+                "  S - SBAS corrections used\n"
+                "  R - RTCM corrections used\n"
+                "  P - pseudorange corrections used\n"
+                "  C - carrier range corrections used\n"
+                "  D - range rate (Doppler) corrections used\n"
+        );
     }
 
     // free up the memory we allocated...
@@ -437,6 +469,7 @@ static slReturn doConfigQuery( const clientData_slOptions* clientData ) {
         cJSON_AddStringToObject( nav, "fix_mode", getFixModeName( config.mode ) );
         cJSON_AddNumberToObject( nav, "fixed_altitude_2D_meters", config.fixedAltM );
         cJSON_AddNumberToObject( nav, "fixed_altitude_2D_variance_m2", config.fixedAltVarM2 );
+        cJSON_AddNumberToObject( nav, "min_elevation", config.minElevDeg );
         cJSON_AddNumberToObject( nav, "position_dop_mask", config.pDoP );
         cJSON_AddNumberToObject( nav, "time_dop_mask", config.tDoP );
         cJSON_AddNumberToObject( nav, "position_accuracy_mask", config.pAccM );
@@ -500,7 +533,8 @@ static slReturn doConfigQuery( const clientData_slOptions* clientData ) {
         printf( "    Dynamic model:                %s\n", getDynamicModelName( config.model )             );
         printf( "    Fix mode:                     %s\n", getFixModeName(      config.mode )              );
         printf( "    Fixed altitude (2D):          %.2f meters\n",             config.fixedAltM           );
-        printf( "    Fixed altitude variance (2D): %.4f meters^2\n",           config.fixedAltVarM2           );
+        printf( "    Fixed altitude variance (2D): %.4f meters^2\n",           config.fixedAltVarM2       );
+        printf( "    Minimum elevation:            %d degrees\n",              config.minElevDeg          );
         printf( "    Position DoP mask:            %.1f\n",                    config.pDoP                );
         printf( "    Time DoP mask:                %.1f\n",                    config.tDoP                );
         printf( "    Position accuracy mask:       %d meters\n",               config.pAccM               );
@@ -922,6 +956,43 @@ static slReturn  actionSaveConfig(  const optionDef_slOptions* defs, const psloC
 }
 
 
+// Reset action function, which resets U-Blox GPS via a software-provoked hardware reset.
+static slReturn  actionReset( const optionDef_slOptions* defs, const psloConfig* config ) {
+
+    // make sure we're synchronized...
+    clientData_slOptions* clientData = config->clientData;
+    slReturn usResp = syncSerial( syncUBX, clientData );
+    if( isErrorReturn( usResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( usResp ), "could not synchronize UBX protocol" );
+
+    // reset the GPS...
+    slReturn urResp = ubxReset( config->clientData->fdPort, config->clientData->verbosity );
+    if( isErrorReturn( urResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( urResp ), "problem resetting the GPS" );
+
+    return makeOkReturn();
+}
+
+
+// Configure for timing action function, which configures the GPS for maximum timing accuracy...
+static slReturn actionConfigForTiming( const optionDef_slOptions* defs, const psloConfig* config ) {
+
+    // make sure we're synchronized...
+    clientData_slOptions* clientData = config->clientData;
+    slReturn usResp = syncSerial( syncUBX, clientData );
+    if( isErrorReturn( usResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( usResp ), "could not synchronize UBX protocol" );
+
+    // configure the GPS...
+    slReturn ucftResp = ubxConfigForTiming( config->clientData->fdPort, config->clientData->verbosity );
+    if( isErrorReturn( ucftResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( ucftResp ), "problem configuring the GPS for timing" );
+
+    return makeOkReturn();
+
+}
+
+
 // Echo action function, which echoes NMEA data to stdout for a configurable period of time.
 static slReturn  actionEcho(  const optionDef_slOptions* defs, const psloConfig* config ) {
 
@@ -1079,6 +1150,24 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
             "synchronize using ascii, nmea, ubx data (default is ubx)"
     };
 
+    optionDef_slOptions resetDef = {
+            1, "reset", 0, argNone,                                             // max, long, short, arg
+            NULL, NULL, 0,                                                      // parser, ptrArg, intArg
+            NULL,                                                               // constrainer
+            actionReset,                                                        // action
+            NULL,                                                               // argument name
+            "reset the GPS"
+    };
+
+    optionDef_slOptions configureForTimingDef = {
+            1, "configure_for_timing", 0, argNone,                              // max, long, short, arg
+            NULL, NULL, 0,                                                      // parser, ptrArg, intArg
+            NULL,                                                               // constrainer
+            actionConfigForTiming,                                              // action
+            NULL,                                                               // argument name
+            "configure the GPS for maximum timing precision"
+    };
+
     optionDef_slOptions optionDefs[] = {
 
             // initialization elements...
@@ -1095,7 +1184,9 @@ static optionDef_slOptions* getOptionDefs( const clientData_slOptions* clientDat
             newbaudDef,
             nmeaDef,
             queryDef,
+            configureForTimingDef,
             saveConfigDef,
+            resetDef,
             echoDef,
             { 0 }  // terminator; MUST be at the end of this list...
     };

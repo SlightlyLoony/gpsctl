@@ -29,6 +29,7 @@
 #define UBX_CFG_TP5  0x31
 #define UBX_CFG_PMS  0x86
 #define UBX_CFG_RATE 0x08
+#define UBX_CFG_RST  0x04
 #define UBX_CFG_CFG  0x09
 #define UBX_MON      0x0A
 #define UBX_MON_VER  0x04
@@ -210,7 +211,7 @@ static slReturn rcvUbxMsg( int fdPort, ubxMsg* msg, int max_ms ) {
 
 
 // Waits for an ACK/NAK message.
-#define ACK_WAIT_MS 500
+#define ACK_WAIT_MS 1500
 static slReturn ubxAckWait( int fdPort ) {
 
     ubxMsg ackMsg;
@@ -355,6 +356,162 @@ static void correctTime( ubxFix *fix ) {
     fix->year--;
     fix->month = 12;
     fix->day = daysInMonth( (unsigned) fix->year, (unsigned) fix->month );
+}
+
+
+// Resets the U-Blox GPS (hardware reset).
+extern slReturn ubxReset( int fdPort, int verbosity ) {
+
+    // construct our reset message (which won't be acknowledged in any way)...
+    slBuffer* body = create_slBuffer( 4, LittleEndian );
+    put_uint16_slBuffer( body, 0, 0 );  // we're doing a hot start...
+    put_uint8_slBuffer( body, 2, 0 );  // immediate restart...
+    ubxType type = { UBX_CFG, UBX_CFG_RST };
+    ubxMsg msg = createUbxMsg( type, body );
+    slReturn sumResp = sendUbxMsg( fdPort, msg );
+    return sumResp;
+}
+
+
+// Configures the GPS for maximum timing accuracy...
+extern slReturn ubxConfigForTiming( int fdPort, int verbosity ) {
+
+    // configure the GNSS for GPS, GLONASS, BeiDou, and Galileo, with no SBAS.
+    // first read the current configuration...
+    ubxType gnssType = { UBX_CFG, UBX_CFG_GNSS };
+    slBuffer* body = create_slBuffer( 0, LittleEndian );
+    ubxMsg msg = createUbxMsg( gnssType, body );
+    ubxMsg gnssMsg;
+    slReturn gnssResp = pollUbx( fdPort, msg, CFG_GNSS_MAX_MS, &gnssMsg );
+    if( isErrorReturn( gnssResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( gnssResp ), "problem getting GNSS information from GPS" );
+
+    // make the changes we need to make...
+    uint8_t gnssRecs = get_uint8_slBuffer( gnssMsg.body, 3 );  // number of configuration blocks...
+    slBuffer* b = gnssMsg.body;
+    for( int i = 0; i < gnssRecs; i++ ) {
+
+        size_t o = 4 + 8 * (size_t)i;
+        gnssID id = (gnssID) get_uint8_slBuffer( b,  o + 0 );
+        uint32_t flags;
+        switch( id ) {
+
+            case GPS:
+            case GLONASS:
+
+                // enable it...
+                flags = (uint32_t) setBit_slBits( get_uint32_slBuffer( b, o + 4), 0, true );
+                put_uint32_slBuffer( b, o + 4, flags );
+
+                // set our min and max channels...
+                put_uint8_slBuffer( b, o + 1,  8 );  // min of 8...
+                put_uint8_slBuffer( b, o + 2, 24 );  // max of 14...
+
+                break;
+
+            case Galileo:
+
+                // enable it...
+                flags = (uint32_t) setBit_slBits( get_uint32_slBuffer( b, o + 4), 0, true );
+                put_uint32_slBuffer( b, o + 4, flags );
+
+                // set our min and max channels...
+                put_uint8_slBuffer( b, o + 1,  8 );  // min of 8...
+                put_uint8_slBuffer( b, o + 2,  8 );  // max of 8...
+
+                break;
+
+            default:
+
+                // disable everything else...
+                flags = (uint32_t) setBit_slBits( get_uint32_slBuffer( b, o + 4), 0, false );
+                put_uint32_slBuffer( b, o + 4, flags );
+
+                // set our min and max channels...
+                put_uint8_slBuffer( b, o + 1,  0 );  // min of 0...
+                put_uint8_slBuffer( b, o + 2,  0 );  // max of 0...
+
+                break;
+        }
+    }
+
+    // now send it back to the GPS...
+    ubxMsg newGnssMsg = createUbxMsg( gnssMsg.type, b );  // this recomputes the checksum...
+    slReturn suamResp = sendUbxAckedMsg( fdPort, newGnssMsg );
+    if( isErrorReturn( suamResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( suamResp ), "problem sending GNSS configuration to GPS" );
+    free( body );
+    free( gnssMsg.body );
+
+
+    // configure the time pulse...
+    // get the time pulse configuration...
+    ubxType tp5Type = { UBX_CFG, UBX_CFG_TP5 };
+    body = create_slBuffer( 1, LittleEndian );
+    *buffer_slBuffer( body ) = 0;  // we only look at time pulse zero...
+    msg = createUbxMsg( tp5Type, body );
+    ubxMsg tp5Msg;
+    slReturn tp5Resp = pollUbx( fdPort, msg, CFG_TP5_MAX_MS, &tp5Msg );
+    if( isErrorReturn( tp5Resp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( tp5Resp ), "problem getting time pulse information from GPS" );
+
+    // make the changes we need to make...
+    b = tp5Msg.body;
+    put_uint16_slBuffer( b,  4,      56 );  // set the antenna cable delay to 56 ns...
+    put_uint16_slBuffer( b,  6,      20 );  // set the RF group delay to 20 ns...
+    put_uint32_slBuffer( b,  8, 1000000 );  // set the unlocked period to 1 second (1,000,000 microseconds)...
+    put_uint32_slBuffer( b, 16,       0 );  // set the unlocked pulse length to 0 seconds...
+    put_uint32_slBuffer( b, 12, 1000000 );  // set the locked period to 1 second (1,000,000 microseconds)...
+    put_uint32_slBuffer( b, 20,  500000 );  // set the locked pulse length to 0.5 seconds (500,000 microseconds)...
+    put_uint32_slBuffer( b, 24,       0 );  // set the user-configurable delay to zero...
+    put_uint32_slBuffer( b, 28,    0x77 );  // set the flags...
+
+    // now send it back to the GPS...
+    ubxMsg newTp5Msg = createUbxMsg( tp5Msg.type, b );
+    suamResp = sendUbxAckedMsg( fdPort, newTp5Msg );
+    if( isErrorReturn( suamResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE(suamResp), "problem sending time pulse configuration to GPS" );
+    free( body );
+    free( tp5Msg.body );
+
+    // configure the navigation engine...
+    // get the navigation engine configuration...
+    ubxType nav5Type = { UBX_CFG, UBX_CFG_NAV5 };
+    body = create_slBuffer( 0, LittleEndian );
+    msg = createUbxMsg( nav5Type, body );
+    ubxMsg nav5Msg;
+    slReturn nav5Resp = pollUbx( fdPort, msg, CFG_NAV5_MAX_MS, &nav5Msg );
+    if( isErrorReturn( nav5Resp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( nav5Resp ), "problem getting navigation engine information from GPS" );
+
+    // make our changes...
+    b = nav5Msg.body;
+    put_uint16_slBuffer( b,  0,     0x0577 );  // configure all settings...
+    put_uint8_slBuffer(  b,  2, Stationary );  // use stationary mode...
+    put_uint8_slBuffer(  b,  3,     Only3D );  // use 3D mode only...
+    put_uint32_slBuffer( b,  4,          0 );  // fixed altitude for 2D (not used)...
+    put_uint32_slBuffer( b,  8,          0 );  // fixed altitude variance for 2D (not used)...
+    put_uint8_slBuffer(  b, 12,         20 );  // minimum elevation is 20 degrees...
+    put_uint16_slBuffer( b, 14,        100 );  // position DoP mask is 10.0...
+    put_uint16_slBuffer( b, 16,        100 );  // time DoP mask is 10.0...
+    put_uint16_slBuffer( b, 18,         40 );  // position accuracy mask is 40 meters...
+    put_uint16_slBuffer( b, 20,         40 );  // time accuracy mask is 40 meters...
+    put_uint8_slBuffer(  b, 22,          0 );  // static hold threshold is 0 cm/s...
+    put_uint8_slBuffer(  b, 23,         60 );  // dynamic GNSS timeout is 60 seconds (not used)...
+    put_uint8_slBuffer(  b, 24,          8 );  // number of satellites that must be above CNo threshold...
+    put_uint8_slBuffer(  b, 25,         40 );  // CNo threshold...
+    put_uint16_slBuffer( b, 28,          0 );  // static hold distance threshold...
+    put_uint8_slBuffer(  b, 30,   USNO_UTC );  // use USNO UTC...
+
+    // send it back to the GPS...
+    ubxMsg newNav5Msg = createUbxMsg( nav5Msg.type, b );
+    suamResp = sendUbxAckedMsg( fdPort, newNav5Msg );
+    if( isErrorReturn( suamResp ) )
+        return makeErrorMsgReturn( ERR_CAUSE( suamResp ), "problem sending navigation engine configuration to GPS" );
+    free( body );
+    free( nav5Msg.body );
+
+    return makeOkReturn();
 }
 
 
@@ -644,7 +801,7 @@ extern slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config ) {
     ubxMsg gnssMsg;
     slReturn gnssResp = pollUbx( fdPort, msg, CFG_GNSS_MAX_MS, &gnssMsg );
     if( isErrorReturn( gnssResp ) )
-        return makeErrorMsgReturn( ERR_CAUSE( antResp ), "problem getting GNSS information from GPS" );
+        return makeErrorMsgReturn( ERR_CAUSE( gnssResp ), "problem getting GNSS information from GPS" );
     config->trkChnnls = get_uint8_slBuffer( gnssMsg.body, 1 );
     config->gnssRecs = get_uint8_slBuffer( gnssMsg.body, 3 );  // number of configuration blocks...
     config->gnss = safeMalloc( sizeof( ubxGNSSConfig ) * config->gnssRecs );
@@ -665,7 +822,7 @@ extern slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config ) {
     ubxMsg nav5Msg;
     slReturn nav5Resp = pollUbx( fdPort, msg, CFG_NAV5_MAX_MS, &nav5Msg );
     if( isErrorReturn( nav5Resp ) )
-        return makeErrorMsgReturn( ERR_CAUSE( antResp ), "problem getting navigation engine information from GPS" );
+        return makeErrorMsgReturn( ERR_CAUSE( nav5Resp ), "problem getting navigation engine information from GPS" );
     config->model               = (dynModel) get_uint8_slBuffer(  nav5Msg.body,  2 );
     config->mode                = (fixMode)  get_uint8_slBuffer(  nav5Msg.body,  3 );
     config->fixedAltM           = 0.01 *     get_int32_slBuffer(  nav5Msg.body,  4 );
@@ -692,7 +849,7 @@ extern slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config ) {
     ubxMsg tp5Msg;
     slReturn tp5Resp = pollUbx( fdPort, msg, CFG_TP5_MAX_MS, &tp5Msg );
     if( isErrorReturn( tp5Resp ) )
-        return makeErrorMsgReturn( ERR_CAUSE( antResp ), "problem getting time pulse information from GPS" );
+        return makeErrorMsgReturn( ERR_CAUSE( tp5Resp ), "problem getting time pulse information from GPS" );
     config->antCableDelayNs   = get_int16_slBuffer(  tp5Msg.body,  4 );
     config->rfGroupDelayNs    = get_int16_slBuffer(  tp5Msg.body,  6 );
     config->freqPeriod        = get_uint32_slBuffer( tp5Msg.body,  8 );
@@ -719,7 +876,7 @@ extern slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config ) {
     ubxMsg rateMsg;
     slReturn rateResp = pollUbx( fdPort, msg, CFG_RATE_MAX_MS, &rateMsg );
     if( isErrorReturn( rateResp ) )
-        return makeErrorMsgReturn( ERR_CAUSE( antResp ), "problem getting fix rate information from GPS" );
+        return makeErrorMsgReturn( ERR_CAUSE( rateResp ), "problem getting fix rate information from GPS" );
     config->measRateMs =                  get_uint16_slBuffer( rateMsg.body, 0 );
     config->navRate    =                  get_uint16_slBuffer( rateMsg.body, 2 );
     config->timeRef    = (fixTimeRefType) get_uint16_slBuffer( rateMsg.body, 4 );
@@ -733,7 +890,7 @@ extern slReturn ubxGetConfig( int fdPort, int verbosity, ubxConfig* config ) {
     ubxMsg pmsMsg;
     slReturn pmsResp = pollUbx( fdPort, msg, CFG_PMS_MAX_MS, &pmsMsg );
     if( isErrorReturn( pmsResp ) )
-        return makeErrorMsgReturn( ERR_CAUSE( antResp ), "problem getting power mode information from GPS" );
+        return makeErrorMsgReturn( ERR_CAUSE( pmsResp ), "problem getting power mode information from GPS" );
     config->powerSetup        = (powerModeType) get_uint8_slBuffer(  pmsMsg.body, 1 );
     config->powerIntervalSecs =                 get_uint16_slBuffer( pmsMsg.body, 2 );
     config->powerOnTimeSecs   =                 get_uint16_slBuffer( pmsMsg.body, 4 );
