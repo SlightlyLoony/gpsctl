@@ -375,7 +375,8 @@ static slReturn doSatelliteQuery( const clientData_slOptions* clientData ) {
     else {
 
         // print out our column headers...
-        printf( "%-8s%3s %3s %3s %3s %5s %-20s%-8s%-15sFlags\n", "GNSS", "ID", "CNo", "El", "Azi", "PRr", "Signal qual", "Sat Hlt", "Orbit Src" );
+        printf( "\n%-8s%3s %3s %3s %3s %5s %-20s%-8s%-15sFlags\n", "GNSS",     "ID", "CNo",  "El", "Azi",   "PRr", "Signal qual",         "Sat Hlt", "Orbit Src" );
+        printf(  "%-8s%3s %3s %3s %3s %5s %-20s%-8s%-15s=====\n",  "=======", "===", "===", "===", "===", "=====", "===================", "=======", "==============" );
 
         // now print out all our satellites...
         for( int i = 0; i < satellites.numberOfSatellites; i++ ) {
@@ -402,7 +403,7 @@ static slReturn doSatelliteQuery( const clientData_slOptions* clientData ) {
 
             free( flags );
         }
-        printf( "Flags:\n"
+        printf( "\nFlags:\n"
                 "  u - used for navigation fix\n"
                 "  d - differential correction is available\n"
                 "  s - carrier-smoothed pseudorange used\n"
